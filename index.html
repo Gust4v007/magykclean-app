@@ -1,6 +1,2094 @@
-import React from 'react';
-import ReactDOM from 'react-dom/client';
-import App from './App';
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>MagykClean</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800;900&display=swap" rel="stylesheet"/>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #0C0F1A; font-family: 'Syne', sans-serif; }
+    @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useEffect } = React;
 
-const root = ReactDOM.createRoot(document.getElementById('root'));
-root.render(<App />);
+
+// ─── CONSTANTS ───────────────────────────────────────────────────────────────
+
+const STATUS_CONFIG = {
+  aguardando_aprovacao: { label: "Aguardando Aprovação", color: "#EC4899", bg: "#FCE7F3", icon: "⏳" },
+  aguardando_coleta: { label: "Aguardando Coleta", color: "#F59E0B", bg: "#FEF3C7", icon: "📦" },
+  coletado:          { label: "Coletado",           color: "#3B82F6", bg: "#DBEAFE", icon: "🚚" },
+  em_lavagem:        { label: "Em Lavagem",          color: "#8B5CF6", bg: "#EDE9FE", icon: "🧼" },
+  pronto:            { label: "Pronto",              color: "#10B981", bg: "#D1FAE5", icon: "✅" },
+  saiu_entrega:      { label: "Saiu p/ Entrega",     color: "#F97316", bg: "#FFEDD5", icon: "🛵" },
+  entregue:          { label: "Entregue",            color: "#6B7280", bg: "#F3F4F6", icon: "🏠" },
+};
+
+const SERVICES = [
+  { id: "higienizacao",      name: "Higienização",          price: 50.00, icon: "🧼", desc: "Limpeza completa do tênis" },
+  { id: "colagem",           name: "Colagem",               price: 50.00, icon: "🔧", desc: "Colagem de solas e partes soltas" },
+  { id: "anti_cresse",       name: "Anti Cresse",           price: 40.00, icon: "✨", desc: "Remoção de vincos e dobras" },
+  { id: "impermeabilizacao", name: "Impermeabilização",     price: 40.00, icon: "💧", desc: "Proteção contra água e manchas" },
+  { id: "desodorizacao",     name: "Desodorização",         price: 30.00, icon: "🌿", desc: "Eliminação de odores" },
+  { id: "hidratacao_camurca",name: "Hidratação da Camurça", price: 30.00, icon: "🤎", desc: "Nutrição para tênis de camurça" },
+  { id: "hidratacao_couro",  name: "Hidratação do Couro",   price: 30.00, icon: "🟤", desc: "Nutrição e brilho para couro" },
+  { id: "pintura_midsole",   name: "Pintura Midsole",       price: 70.00, icon: "🎨", desc: "Pintura e restauração da sola lateral" },
+  { id: "restauracao",       name: "Restauração",           price: 110.00, icon: "🔄", desc: "Restauração completa do tênis" },
+];
+
+// ─── HELPERS ─────────────────────────────────────────────────────────────────
+
+function genId() { return "MK" + String(Math.floor(Math.random() * 9000) + 1000); }
+
+function fmtCPF(v) {
+  return v.replace(/\D/g, "").slice(0, 11)
+    .replace(/(\d{3})(\d)/, "$1.$2")
+    .replace(/(\d{3})(\d)/, "$1.$2")
+    .replace(/(\d{3})(\d{1,2})$/, "$1-$2");
+}
+function fmtPhone(v) {
+  return v.replace(/\D/g, "").slice(0, 11)
+    .replace(/(\d{2})(\d)/, "($1) $2")
+    .replace(/(\d{5})(\d{1,4})$/, "$1-$2");
+}
+function fmtCEP(v) {
+  return v.replace(/\D/g, "").slice(0, 8).replace(/(\d{5})(\d{1,3})$/, "$1-$2");
+}
+function validCPF(cpf) {
+  const c = cpf.replace(/\D/g, "");
+  if (c.length !== 11 || /^(\d)\1+$/.test(c)) return false;
+  let s = 0; for (let i = 0; i < 9; i++) s += +c[i] * (10 - i);
+  let r = (s * 10) % 11; if (r >= 10) r = 0; if (r !== +c[9]) return false;
+  s = 0; for (let i = 0; i < 10; i++) s += +c[i] * (11 - i);
+  r = (s * 10) % 11; if (r >= 10) r = 0; return r === +c[10];
+}
+function validEmail(e) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e); }
+
+// ─── DB ───────────────────────────────────────────────────────────────────────
+
+async function dbGet(key) {
+  try { const r = await window.storage.get(key); return r ? JSON.parse(r.value) : null; }
+  catch { return null; }
+}
+async function dbSet(key, val) {
+  try { await window.storage.set(key, JSON.stringify(val)); } catch {}
+}
+
+// ─── STATUS BADGE ─────────────────────────────────────────────────────────────
+
+function StatusBadge({ status }) {
+  const c = STATUS_CONFIG[status] || STATUS_CONFIG.aguardando_coleta;
+  return (
+    <span style={{
+      background: c.bg, color: c.color, border: `1px solid ${c.color}44`,
+      padding: "3px 10px", borderRadius: 20, fontSize: 12, fontWeight: 700,
+      display: "inline-flex", alignItems: "center", gap: 4, whiteSpace: "nowrap",
+    }}>
+      {c.icon} {c.label}
+    </span>
+  );
+}
+
+// ─── OS MODAL ────────────────────────────────────────────────────────────────
+
+function OSModal({ order, onClose }) {
+  const payLabel = {pix:"PIX",credito:"Cartão de Crédito",debito:"Cartão de Débito",dinheiro:"Dinheiro"}[order.payment] || "—";
+  const payIcon  = {pix:"🔵",credito:"💳",debito:"💳",dinheiro:"💵"}[order.payment] || "💳";
+  const statusCfg = STATUS_CONFIG[order.status] || {};
+  const now = new Date().toLocaleString("pt-BR");
+  const requestedAt = order.requestedAt ? new Date(order.requestedAt).toLocaleString("pt-BR") : now;
+  const serviceList = (order.services || (order.service ? [order.service] : [])).map(id => SERVICES.find(s => s.id === id)).filter(Boolean);
+
+  return (
+    <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.7)", zIndex:9999, display:"flex", flexDirection:"column", fontFamily:"'Segoe UI',Arial,sans-serif" }}>
+      <style>{`
+        @media print {
+          .os-no-print { display: none !important; }
+          .os-sheet { box-shadow: none !important; border-radius: 0 !important; max-height: none !important; overflow: visible !important; }
+          body { margin: 0; }
+        }
+        @page { size: A4; margin: 18mm; }
+      `}</style>
+
+      {/* Toolbar */}
+      <div className="os-no-print" style={{ background:"#0C0F1A", display:"flex", alignItems:"center", justifyContent:"space-between", padding:"10px 20px", flexShrink:0 }}>
+        <span style={{ color:"#22D3EE", fontWeight:800, fontSize:15 }}>🖨 Ordem de Serviço — {order.id}</span>
+        <div style={{ display:"flex", gap:10 }}>
+          <button onClick={() => window.print()} style={{ background:"#22D3EE", color:"#0C0F1A", border:"none", borderRadius:8, padding:"8px 20px", fontWeight:800, fontSize:14, cursor:"pointer" }}>
+            Imprimir / Salvar PDF
+          </button>
+          <button onClick={onClose} style={{ background:"rgba(255,255,255,0.1)", color:"#fff", border:"none", borderRadius:8, padding:"8px 14px", cursor:"pointer", fontSize:14 }}>✕ Fechar</button>
+        </div>
+      </div>
+
+      {/* Scrollable preview */}
+      <div style={{ flex:1, overflow:"auto", background:"#E2E8F0", padding:"24px", display:"flex", justifyContent:"center" }}>
+        <div className="os-sheet" style={{ background:"#fff", width:"210mm", minHeight:"297mm", borderRadius:8, boxShadow:"0 4px 32px rgba(0,0,0,0.18)", padding:"20mm 18mm", boxSizing:"border-box" }}>
+
+          {/* Header */}
+          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", paddingBottom:18, borderBottom:"3px solid #22D3EE", marginBottom:24 }}>
+            <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+              <div style={{ fontSize:40 }}>👟</div>
+              <div>
+                <div style={{ fontSize:28, fontWeight:900, letterSpacing:-1 }}><span style={{ color:"#22D3EE" }}>Magyk</span>Clean</div>
+                <div style={{ fontSize:11, color:"#64748b", fontWeight:600, letterSpacing:1, marginTop:2 }}>LAVANDERIA PREMIUM DE TÊNIS</div>
+              </div>
+            </div>
+            <div style={{ textAlign:"right" }}>
+              <div style={{ fontSize:11, color:"#64748b", letterSpacing:1, fontWeight:700 }}>ORDEM DE SERVIÇO</div>
+              <div style={{ fontSize:24, fontWeight:900, color:"#0f172a" }}>{order.id}</div>
+              <div style={{ fontSize:12, color:"#64748b", marginTop:4 }}>Emitida em {now}</div>
+            </div>
+          </div>
+
+          {/* Cliente */}
+          <div style={{ marginBottom:20 }}>
+            <div style={{ fontSize:11, fontWeight:800, color:"#22D3EE", letterSpacing:1.5, textTransform:"uppercase", marginBottom:10, paddingBottom:4, borderBottom:"1px solid #e2e8f0" }}>Dados do Cliente</div>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+              {[["NOME", order.client], ["TELEFONE", order.phone]].map(([l,v]) => (
+                <div key={l}><div style={{ fontSize:10, fontWeight:700, color:"#94a3b8", marginBottom:2 }}>{l}</div><div style={{ fontSize:14, fontWeight:600 }}>{v||"—"}</div></div>
+              ))}
+              <div style={{ gridColumn:"1/-1" }}><div style={{ fontSize:10, fontWeight:700, color:"#94a3b8", marginBottom:2 }}>ENDEREÇO</div><div style={{ fontSize:14, fontWeight:600 }}>{order.address||"—"}</div></div>
+            </div>
+          </div>
+
+          {/* Tênis */}
+          <div style={{ marginBottom:20 }}>
+            <div style={{ fontSize:11, fontWeight:800, color:"#22D3EE", letterSpacing:1.5, textTransform:"uppercase", marginBottom:10, paddingBottom:4, borderBottom:"1px solid #e2e8f0" }}>Dados do Tênis</div>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+              <div><div style={{ fontSize:10, fontWeight:700, color:"#94a3b8", marginBottom:2 }}>MODELO</div><div style={{ fontSize:14, fontWeight:600 }}>{order.sneakers}</div></div>
+              <div><div style={{ fontSize:10, fontWeight:700, color:"#94a3b8", marginBottom:2 }}>STATUS</div>
+                <span style={{ display:"inline-block", padding:"3px 12px", borderRadius:20, fontSize:12, fontWeight:700, background: statusCfg.bg||"#dbeafe", color: statusCfg.color||"#1d4ed8" }}>{statusCfg.icon} {statusCfg.label||order.status}</span>
+              </div>
+              <div><div style={{ fontSize:10, fontWeight:700, color:"#94a3b8", marginBottom:2 }}>SOLICITADO EM</div><div style={{ fontSize:14, fontWeight:600 }}>{requestedAt}</div></div>
+              {order.pickupDate && <div><div style={{ fontSize:10, fontWeight:700, color:"#94a3b8", marginBottom:2 }}>COLETA</div><div style={{ fontSize:14, fontWeight:600 }}>{order.pickupDate}</div></div>}
+              {order.deliveryDate && <div><div style={{ fontSize:10, fontWeight:700, color:"#94a3b8", marginBottom:2 }}>ENTREGA PREVISTA</div><div style={{ fontSize:14, fontWeight:600 }}>{order.deliveryDate}</div></div>}
+            </div>
+            {order.notes && <div style={{ background:"#fffbeb", borderLeft:"3px solid #f59e0b", padding:"10px 14px", borderRadius:4, fontSize:13, color:"#92400e", marginTop:12 }}>📝 {order.notes}</div>}
+          </div>
+
+          {/* Serviços */}
+          <div style={{ marginBottom:20 }}>
+            <div style={{ fontSize:11, fontWeight:800, color:"#22D3EE", letterSpacing:1.5, textTransform:"uppercase", marginBottom:10, paddingBottom:4, borderBottom:"1px solid #e2e8f0" }}>Serviços Contratados</div>
+            <table style={{ width:"100%", borderCollapse:"collapse", fontSize:14 }}>
+              <thead>
+                <tr style={{ background:"#f8fafc" }}>
+                  <th style={{ padding:"8px 12px", textAlign:"left", fontSize:11, color:"#64748b", letterSpacing:1 }}>SERVIÇO</th>
+                  <th style={{ padding:"8px 12px", textAlign:"right", fontSize:11, color:"#64748b", letterSpacing:1 }}>VALOR</th>
+                </tr>
+              </thead>
+              <tbody>
+                {serviceList.map(svc => (
+                  <tr key={svc.id}>
+                    <td style={{ padding:"10px 12px", borderBottom:"1px solid #f1f5f9" }}>{svc.icon} {svc.name}</td>
+                    <td style={{ padding:"10px 12px", borderBottom:"1px solid #f1f5f9", textAlign:"right", fontWeight:700 }}>R$ {svc.price.toFixed(2)}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr style={{ background:"#f8fafc", borderTop:"2px solid #22D3EE" }}>
+                  <td style={{ padding:"12px", fontWeight:800, fontSize:16 }}>TOTAL</td>
+                  <td style={{ padding:"12px", fontWeight:800, fontSize:16, textAlign:"right", color:"#22D3EE" }}>R$ {Number(order.price).toFixed(2)}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+
+          {/* Pagamento */}
+          <div style={{ marginBottom:20 }}>
+            <div style={{ fontSize:11, fontWeight:800, color:"#22D3EE", letterSpacing:1.5, textTransform:"uppercase", marginBottom:10, paddingBottom:4, borderBottom:"1px solid #e2e8f0" }}>Forma de Pagamento</div>
+            <div style={{ display:"inline-flex", alignItems:"center", gap:12, background:"#f0fdf4", border:"1px solid #86efac", borderRadius:10, padding:"12px 20px" }}>
+              <span style={{ fontSize:24 }}>{payIcon}</span>
+              <div>
+                <div style={{ fontSize:15, fontWeight:800, color:"#15803d" }}>{payLabel}</div>
+                <div style={{ fontSize:11, color:"#64748b", marginTop:2 }}>Pagamento na entrega</div>
+              </div>
+            </div>
+          </div>
+
+          {/* Foto */}
+          {order.photo && (
+            <div style={{ marginBottom:20 }}>
+              <div style={{ fontSize:11, fontWeight:800, color:"#22D3EE", letterSpacing:1.5, textTransform:"uppercase", marginBottom:10, paddingBottom:4, borderBottom:"1px solid #e2e8f0" }}>Foto do Tênis</div>
+              <img src={order.photo} alt="Tênis" style={{ width:"100%", maxHeight:180, objectFit:"cover", borderRadius:10, border:"1px solid #e2e8f0" }} />
+            </div>
+          )}
+
+          {/* Footer */}
+          <div style={{ marginTop:32, paddingTop:16, borderTop:"1px solid #e2e8f0", textAlign:"center", fontSize:11, color:"#94a3b8" }}>
+            MagykClean — Lavanderia Premium de Tênis &nbsp;|&nbsp; Obrigado pela preferência! 👟✨<br/>
+            Documento gerado em {now}
+          </div>
+
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── LOGIN FORM ───────────────────────────────────────────────────────────────
+
+function LoginForm({ clients, onSuccess, onGoRegister, justRegistered, regEmail, onGoAdmin }) {
+  const [email, setEmail]       = useState(regEmail || "");
+  const [password, setPassword] = useState("");
+  const [showPass, setShowPass] = useState(false);
+  const [error, setError]       = useState("");
+  const [loading, setLoading]   = useState(false);
+  const [tapCount, setTapCount] = useState(0);
+
+  // Secret: tap the logo 7x to go to admin
+  function handleLogoTap() {
+    const next = tapCount + 1;
+    setTapCount(next);
+    if (next >= 7) { setTapCount(0); onGoAdmin(); }
+  }
+
+  function submit() {
+    if (!email || !password) { setError("Preencha e-mail e senha."); return; }
+    setLoading(true);
+    setTimeout(() => {
+      const match = (clients || []).find(c => c.email.trim().toLowerCase() === email.trim().toLowerCase());
+      if (!match)                    { setError("E-mail não encontrado. Crie uma conta."); setLoading(false); return; }
+      if (match.password !== password) { setError("Senha incorreta. Tente novamente.");   setLoading(false); return; }
+      onSuccess(match);
+    }, 500);
+  }
+
+  const inp = {
+    width: "100%", padding: "12px 14px", borderRadius: 10, boxSizing: "border-box",
+    border: "1.5px solid rgba(255,255,255,0.15)",
+    background: "rgba(255,255,255,0.07)", color: "#fff",
+    fontSize: 14, fontFamily: "inherit", outline: "none",
+  };
+  const lbl = { fontSize: 11, fontWeight: 700, color: "#64748B", letterSpacing: 0.5, display: "block", marginBottom: 4 };
+
+  return (
+    <div style={{
+      minHeight: "100vh", background: "linear-gradient(135deg,#0C0F1A 0%,#0E2440 100%)",
+      display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+      padding: "40px 20px", fontFamily: "'Syne',sans-serif",
+    }}>
+      <div style={{ textAlign: "center", marginBottom: 32 }}>
+        <div style={{ fontSize: 38, marginBottom: 6, cursor: "default", userSelect: "none" }} onClick={handleLogoTap}>👟✨</div>
+        <h1 style={{ fontSize: 32, fontWeight: 800, color: "#fff", margin: 0, letterSpacing: -1 }}>
+          <span style={{ color: "#22D3EE" }}>Magyk</span>Clean
+        </h1>
+        <p style={{ color: "#94A3B8", margin: "4px 0 0", fontSize: 13 }}>Lavanderia Premium de Tênis</p>
+      </div>
+
+      <div style={{
+        background: "rgba(255,255,255,0.05)", backdropFilter: "blur(10px)",
+        borderRadius: 24, padding: 32, width: "100%", maxWidth: 400,
+        border: "1px solid rgba(255,255,255,0.1)",
+      }}>
+        {justRegistered && (
+          <div style={{
+            background: "rgba(16,185,129,0.12)", border: "1px solid rgba(16,185,129,0.35)",
+            borderRadius: 12, padding: "12px 16px", marginBottom: 20,
+            display: "flex", alignItems: "center", gap: 10,
+          }}>
+            <span style={{ fontSize: 20 }}>🎉</span>
+            <div>
+              <div style={{ color: "#10B981", fontWeight: 700, fontSize: 14 }}>Cadastro realizado com sucesso!</div>
+              <div style={{ color: "#6EE7B7", fontSize: 12, marginTop: 2 }}>Agora faça login para continuar</div>
+            </div>
+          </div>
+        )}
+
+        <h2 style={{ color: "#fff", fontSize: 22, fontWeight: 800, margin: "0 0 4px" }}>
+          {justRegistered ? "Acesse sua conta" : "Bem-vindo de volta!"}
+        </h2>
+        <p style={{ color: "#64748B", fontSize: 13, margin: "0 0 22px" }}>Entre com seu e-mail e senha</p>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <div>
+            <label style={lbl}>E-MAIL</label>
+            <input style={inp} type="email" placeholder="seu@email.com"
+              value={email} onChange={e => { setEmail(e.target.value); setError(""); }} />
+          </div>
+          <div>
+            <label style={lbl}>SENHA</label>
+            <div style={{ position: "relative" }}>
+              <input style={{ ...inp, paddingRight: 44 }}
+                type={showPass ? "text" : "password"} placeholder="Sua senha"
+                value={password}
+                onChange={e => { setPassword(e.target.value); setError(""); }}
+                onKeyDown={e => e.key === "Enter" && submit()} />
+              <button onClick={() => setShowPass(p => !p)} style={{
+                position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)",
+                background: "none", border: "none", cursor: "pointer", fontSize: 16,
+              }}>{showPass ? "🙈" : "👁"}</button>
+            </div>
+          </div>
+
+          {error && (
+            <div style={{
+              background: "rgba(248,113,113,0.12)", border: "1px solid rgba(248,113,113,0.35)",
+              borderRadius: 10, padding: "10px 14px", fontSize: 13, color: "#F87171",
+            }}>⚠ {error}</div>
+          )}
+
+          <button onClick={submit} disabled={loading} style={{
+            background: loading ? "#0891B2" : "#22D3EE", color: "#0C0F1A",
+            border: "none", borderRadius: 12, padding: 14,
+            fontWeight: 800, fontSize: 15, cursor: loading ? "not-allowed" : "pointer",
+            fontFamily: "inherit", marginTop: 4,
+          }}>{loading ? "Entrando..." : "Entrar →"}</button>
+        </div>
+      </div>
+
+      <p style={{ textAlign: "center", color: "#475569", fontSize: 13, marginTop: 20 }}>
+        Não tem conta?{" "}
+        <span onClick={onGoRegister} style={{ color: "#22D3EE", cursor: "pointer", fontWeight: 700 }}>
+          Criar conta grátis
+        </span>
+      </p>
+    </div>
+  );
+}
+
+// ─── REGISTER FORM ────────────────────────────────────────────────────────────
+
+function RegisterForm({ clients, onDone, onGoLogin }) {
+  const [step, setStep]           = useState(1);
+  const [errors, setErrors]       = useState({});
+  const [cepStatus, setCepStatus] = useState("idle");
+  const [showPass, setShowPass]   = useState(false);
+  const [showConf, setShowConf]   = useState(false);
+  const [form, setForm] = useState({
+    name: "", cpf: "", phone: "", email: "", password: "", confirmPassword: "",
+    cep: "", street: "", number: "", complement: "", neighborhood: "", city: "", state: "",
+  });
+
+  function set(f, v) { setForm(p => ({ ...p, [f]: v })); setErrors(p => ({ ...p, [f]: "" })); }
+
+  function pwStrength(p) {
+    let s = 0;
+    if (p.length >= 8) s++;
+    if (/[A-Z]/.test(p)) s++;
+    if (/[0-9]/.test(p)) s++;
+    if (/[^A-Za-z0-9]/.test(p)) s++;
+    return s;
+  }
+
+  function validateStep1() {
+    const e = {};
+    if (!form.name.trim() || form.name.trim().split(" ").length < 2) e.name = "Digite nome completo";
+    if (!validCPF(form.cpf)) e.cpf = "CPF inválido";
+    else if ((clients || []).some(c => c.cpf === form.cpf)) e.cpf = "CPF já cadastrado";
+    if (form.phone.replace(/\D/g, "").length < 11) e.phone = "Celular inválido";
+    if (!validEmail(form.email)) e.email = "E-mail inválido";
+    else if ((clients || []).some(c => c.email.toLowerCase() === form.email.toLowerCase())) e.email = "E-mail já cadastrado";
+    if (form.password.length < 6) e.password = "Mínimo 6 caracteres";
+    if (form.password !== form.confirmPassword) e.confirmPassword = "As senhas não coincidem";
+    setErrors(e);
+    return Object.keys(e).length === 0;
+  }
+
+  function validateStep2() {
+    const e = {};
+    if (form.cep.replace(/\D/g, "").length < 8) e.cep = "CEP inválido";
+    if (!form.street.trim()) e.street = "Informe a rua";
+    if (!form.number.trim()) e.number = "Informe o número";
+    if (!form.neighborhood.trim()) e.neighborhood = "Informe o bairro";
+    if (!form.city.trim()) e.city = "Informe a cidade";
+    if (!form.state.trim()) e.state = "Informe o estado";
+    setErrors(e);
+    return Object.keys(e).length === 0;
+  }
+
+  async function fetchCEP(cep) {
+    const raw = cep.replace(/\D/g, "");
+    if (raw.length !== 8) { setCepStatus("idle"); return; }
+    setCepStatus("loading");
+    const endpoints = [
+      () => fetch(`https://viacep.com.br/ws/${raw}/json/`).then(r => r.json()).then(d => {
+        if (d.erro) throw new Error("not_found");
+        return { street: d.logradouro, neighborhood: d.bairro, city: d.localidade, state: d.uf };
+      }),
+      () => fetch(`https://brasilapi.com.br/api/cep/v2/${raw}`).then(r => r.json()).then(d => {
+        if (!d.city) throw new Error("not_found");
+        return { street: d.street, neighborhood: d.neighborhood, city: d.city, state: d.state };
+      }),
+      () => fetch(`https://brasilapi.com.br/api/cep/v1/${raw}`).then(r => r.json()).then(d => {
+        if (!d.city) throw new Error("not_found");
+        return { street: d.street, neighborhood: d.neighborhood, city: d.city, state: d.state };
+      }),
+    ];
+    for (const attempt of endpoints) {
+      try {
+        const addr = await attempt();
+        setForm(p => ({
+          ...p,
+          street:       addr.street       || p.street,
+          neighborhood: addr.neighborhood || p.neighborhood,
+          city:         addr.city         || p.city,
+          state:        addr.state        || p.state,
+        }));
+        setCepStatus("success");
+        setErrors(p => ({ ...p, cep: "" }));
+        return;
+      } catch {}
+    }
+    setCepStatus("error");
+    setErrors(p => ({ ...p, cep: "CEP não encontrado. Preencha manualmente." }));
+  }
+
+  const inp = (field) => ({
+    width: "100%", padding: "12px 14px", borderRadius: 10, boxSizing: "border-box",
+    border: `1.5px solid ${errors[field] ? "#F87171" : "rgba(255,255,255,0.15)"}`,
+    background: "rgba(255,255,255,0.07)", color: "#fff",
+    fontSize: 14, fontFamily: "inherit", outline: "none",
+  });
+  const autoInp = (field) => ({
+    ...inp(field),
+    borderColor: cepStatus === "success" && form[field] ? "#10B98166" : errors[field] ? "#F87171" : "rgba(255,255,255,0.15)",
+  });
+  const lbl = { fontSize: 11, fontWeight: 700, color: "#64748B", letterSpacing: 0.5, display: "block", marginBottom: 4 };
+  const errStyle = { fontSize: 11, color: "#F87171", marginTop: 3 };
+
+  return (
+    <div style={{
+      minHeight: "100vh", background: "linear-gradient(135deg,#0C0F1A 0%,#0E2440 100%)",
+      display: "flex", flexDirection: "column", alignItems: "center",
+      padding: "40px 20px", fontFamily: "'Syne',sans-serif",
+    }}>
+      <div style={{ textAlign: "center", marginBottom: 28 }}>
+        <div style={{ fontSize: 36, marginBottom: 6 }}>👟✨</div>
+        <h1 style={{ fontSize: 30, fontWeight: 800, color: "#fff", margin: 0, letterSpacing: -1 }}>
+          <span style={{ color: "#22D3EE" }}>Magyk</span>Clean
+        </h1>
+      </div>
+
+      {step < 3 && (
+        <div style={{ width: "100%", maxWidth: 460 }}>
+          {/* Step indicator */}
+          <div style={{ display: "flex", alignItems: "center", marginBottom: 24 }}>
+            {[1, 2].map((s, i) => (
+              <div key={s} style={{ display: "flex", alignItems: "center", flex: i === 0 ? 1 : "unset" }}>
+                <div style={{
+                  width: 32, height: 32, borderRadius: "50%", flexShrink: 0,
+                  background: step >= s ? "#22D3EE" : "rgba(255,255,255,0.1)",
+                  color: step >= s ? "#0C0F1A" : "#64748B",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  fontWeight: 800, fontSize: 13,
+                }}>{step > s ? "✓" : s}</div>
+                {i === 0 && <div style={{ flex: 1, height: 2, margin: "0 8px", background: step > 1 ? "#22D3EE" : "rgba(255,255,255,0.1)" }} />}
+              </div>
+            ))}
+            <span style={{ fontSize: 12, color: "#94A3B8", fontWeight: 600, marginLeft: 12 }}>
+              {step === 1 ? "Dados Pessoais" : "Endereço"}
+            </span>
+          </div>
+
+          <div style={{
+            background: "rgba(255,255,255,0.05)", backdropFilter: "blur(10px)",
+            borderRadius: 24, padding: 28, border: "1px solid rgba(255,255,255,0.1)",
+          }}>
+            {step === 1 && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                <div>
+                  <h2 style={{ color: "#fff", fontSize: 20, fontWeight: 800, margin: "0 0 4px" }}>Criar sua conta</h2>
+                  <p style={{ color: "#64748B", fontSize: 13, margin: "0 0 18px" }}>Preencha seus dados pessoais</p>
+                </div>
+                <div>
+                  <label style={lbl}>NOME COMPLETO</label>
+                  <input style={inp("name")} placeholder="Ex: João Silva Santos"
+                    value={form.name} onChange={e => set("name", e.target.value)} />
+                  {errors.name && <div style={errStyle}>⚠ {errors.name}</div>}
+                </div>
+                <div>
+                  <label style={lbl}>CPF</label>
+                  <input style={inp("cpf")} placeholder="000.000.000-00"
+                    value={form.cpf} onChange={e => set("cpf", fmtCPF(e.target.value))} />
+                  {errors.cpf && <div style={errStyle}>⚠ {errors.cpf}</div>}
+                </div>
+                <div>
+                  <label style={lbl}>CELULAR</label>
+                  <input style={inp("phone")} placeholder="(11) 99999-9999"
+                    value={form.phone} onChange={e => set("phone", fmtPhone(e.target.value))} />
+                  {errors.phone && <div style={errStyle}>⚠ {errors.phone}</div>}
+                </div>
+                <div>
+                  <label style={lbl}>E-MAIL</label>
+                  <input style={inp("email")} type="email" placeholder="seu@email.com"
+                    value={form.email} onChange={e => set("email", e.target.value)} />
+                  {errors.email && <div style={errStyle}>⚠ {errors.email}</div>}
+                </div>
+                <div>
+                  <label style={lbl}>SENHA</label>
+                  <div style={{ position: "relative" }}>
+                    <input style={{ ...inp("password"), paddingRight: 44 }}
+                      type={showPass ? "text" : "password"} placeholder="Mínimo 6 caracteres"
+                      value={form.password} onChange={e => set("password", e.target.value)} />
+                    <button onClick={() => setShowPass(p => !p)} style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", fontSize: 16 }}>
+                      {showPass ? "🙈" : "👁"}
+                    </button>
+                  </div>
+                  {form.password && (
+                    <div style={{ display: "flex", gap: 4, marginTop: 6, alignItems: "center" }}>
+                      {[1,2,3,4].map(i => {
+                        const s = pwStrength(form.password);
+                        const colors = ["","#F87171","#F59E0B","#22D3EE","#10B981"];
+                        return <div key={i} style={{ flex: 1, height: 3, borderRadius: 4, background: i <= s ? colors[s] : "rgba(255,255,255,0.1)" }} />;
+                      })}
+                      <span style={{ fontSize: 10, color: "#64748B", marginLeft: 6, whiteSpace: "nowrap" }}>
+                        {["","Fraca","Média","Forte","Muito forte"][pwStrength(form.password)]}
+                      </span>
+                    </div>
+                  )}
+                  {errors.password && <div style={errStyle}>⚠ {errors.password}</div>}
+                </div>
+                <div>
+                  <label style={lbl}>CONFIRMAR SENHA</label>
+                  <div style={{ position: "relative" }}>
+                    <input style={{ ...inp("confirmPassword"), paddingRight: 44 }}
+                      type={showConf ? "text" : "password"} placeholder="Repita a senha"
+                      value={form.confirmPassword} onChange={e => set("confirmPassword", e.target.value)} />
+                    <button onClick={() => setShowConf(p => !p)} style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", fontSize: 16 }}>
+                      {showConf ? "🙈" : "👁"}
+                    </button>
+                  </div>
+                  {form.confirmPassword && form.password === form.confirmPassword && (
+                    <div style={{ fontSize: 11, color: "#10B981", marginTop: 3 }}>✓ Senhas coincidem</div>
+                  )}
+                  {errors.confirmPassword && <div style={errStyle}>⚠ {errors.confirmPassword}</div>}
+                </div>
+                <button onClick={() => validateStep1() && setStep(2)} style={{
+                  background: "#22D3EE", color: "#0C0F1A", border: "none", borderRadius: 12,
+                  padding: 14, fontWeight: 800, fontSize: 15, cursor: "pointer", fontFamily: "inherit", marginTop: 4,
+                }}>Continuar →</button>
+              </div>
+            )}
+
+            {step === 2 && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                <div>
+                  <h2 style={{ color: "#fff", fontSize: 20, fontWeight: 800, margin: "0 0 4px" }}>Seu endereço</h2>
+                  <p style={{ color: "#64748B", fontSize: 13, margin: "0 0 18px" }}>Para agendarmos coleta e entrega</p>
+                </div>
+                <div>
+                  <label style={lbl}>CEP</label>
+                  <div style={{ position: "relative" }}>
+                    <input
+                      style={{ ...inp("cep"), paddingRight: 44, borderColor: cepStatus === "success" ? "#10B98166" : cepStatus === "error" ? "#F87171" : errors.cep ? "#F87171" : "rgba(255,255,255,0.15)" }}
+                      placeholder="00000-000" maxLength={9}
+                      value={form.cep}
+                      onChange={e => { const v = fmtCEP(e.target.value); set("cep", v); fetchCEP(v); }}
+                    />
+                    <div style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", fontSize: 14 }}>
+                      {cepStatus === "loading" && <span style={{ color: "#94A3B8" }}>⏳</span>}
+                      {cepStatus === "success" && <span style={{ color: "#10B981" }}>✓</span>}
+                      {cepStatus === "error"   && <span style={{ color: "#F87171" }}>✕</span>}
+                    </div>
+                  </div>
+                  {cepStatus === "loading" && <div style={{ fontSize: 11, color: "#22D3EE", marginTop: 4 }}>🔍 Buscando endereço...</div>}
+                  {cepStatus === "success" && <div style={{ fontSize: 11, color: "#10B981", marginTop: 4 }}>✅ Endereço encontrado!</div>}
+                  {errors.cep && <div style={errStyle}>⚠ {errors.cep}</div>}
+                  {cepStatus === "idle" && !errors.cep && <div style={{ fontSize: 11, color: "#475569", marginTop: 3 }}>Digite o CEP para preenchimento automático</div>}
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 90px", gap: 10 }}>
+                  <div>
+                    <label style={lbl}>RUA {cepStatus === "success" && form.street && <span style={{ color: "#10B981", fontSize: 10 }}>✓ auto</span>}</label>
+                    <input style={autoInp("street")} placeholder="Rua das Flores"
+                      value={form.street} onChange={e => set("street", e.target.value)} />
+                    {errors.street && <div style={errStyle}>⚠ {errors.street}</div>}
+                  </div>
+                  <div>
+                    <label style={lbl}>NÚMERO</label>
+                    <input style={inp("number")} placeholder="123"
+                      value={form.number} onChange={e => set("number", e.target.value)} />
+                    {errors.number && <div style={errStyle}>⚠ {errors.number}</div>}
+                  </div>
+                </div>
+                <div>
+                  <label style={lbl}>COMPLEMENTO <span style={{ color: "#475569", fontWeight: 400 }}>(opcional)</span></label>
+                  <input style={inp("complement")} placeholder="Apto 42, Bloco B..."
+                    value={form.complement} onChange={e => set("complement", e.target.value)} />
+                </div>
+                <div>
+                  <label style={lbl}>BAIRRO {cepStatus === "success" && form.neighborhood && <span style={{ color: "#10B981", fontSize: 10 }}>✓ auto</span>}</label>
+                  <input style={autoInp("neighborhood")} placeholder="Centro"
+                    value={form.neighborhood} onChange={e => set("neighborhood", e.target.value)} />
+                  {errors.neighborhood && <div style={errStyle}>⚠ {errors.neighborhood}</div>}
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 70px", gap: 10 }}>
+                  <div>
+                    <label style={lbl}>CIDADE {cepStatus === "success" && form.city && <span style={{ color: "#10B981", fontSize: 10 }}>✓ auto</span>}</label>
+                    <input style={autoInp("city")} placeholder="São Paulo"
+                      value={form.city} onChange={e => set("city", e.target.value)} />
+                    {errors.city && <div style={errStyle}>⚠ {errors.city}</div>}
+                  </div>
+                  <div>
+                    <label style={lbl}>UF {cepStatus === "success" && form.state && <span style={{ color: "#10B981", fontSize: 10 }}>✓</span>}</label>
+                    <input style={autoInp("state")} placeholder="SP" maxLength={2}
+                      value={form.state} onChange={e => set("state", e.target.value.toUpperCase().slice(0,2))} />
+                    {errors.state && <div style={errStyle}>⚠ {errors.state}</div>}
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 10, marginTop: 4 }}>
+                  <button onClick={() => setStep(1)} style={{
+                    flex: 1, background: "rgba(255,255,255,0.08)", color: "#94A3B8",
+                    border: "1px solid rgba(255,255,255,0.1)", borderRadius: 12,
+                    padding: 14, fontWeight: 700, fontSize: 15, cursor: "pointer", fontFamily: "inherit",
+                  }}>← Voltar</button>
+                  <button onClick={() => validateStep2() && setStep(3)} style={{
+                    flex: 2, background: "#22D3EE", color: "#0C0F1A", border: "none", borderRadius: 12,
+                    padding: 14, fontWeight: 800, fontSize: 15, cursor: "pointer", fontFamily: "inherit",
+                  }}>Criar Conta 🎉</button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <p style={{ textAlign: "center", color: "#475569", fontSize: 12, marginTop: 16 }}>
+            Já tem conta?{" "}
+            <span onClick={onGoLogin} style={{ color: "#22D3EE", cursor: "pointer", fontWeight: 700 }}>Fazer login</span>
+          </p>
+        </div>
+      )}
+
+      {step === 3 && (
+        <div style={{
+          background: "rgba(255,255,255,0.05)", backdropFilter: "blur(10px)",
+          borderRadius: 24, padding: 36, width: "100%", maxWidth: 420,
+          border: "1px solid rgba(255,255,255,0.1)", textAlign: "center",
+        }}>
+          <div style={{ fontSize: 56, marginBottom: 14 }}>🎉</div>
+          <h2 style={{ color: "#fff", fontSize: 22, fontWeight: 800, margin: "0 0 6px" }}>Conta criada!</h2>
+          <p style={{ color: "#94A3B8", fontSize: 14, margin: "0 0 6px" }}>
+            Bem-vindo(a), <strong style={{ color: "#22D3EE" }}>{form.name.split(" ")[0]}</strong>!
+          </p>
+          <p style={{ color: "#64748B", fontSize: 13, margin: "0 0 24px" }}>Seu cadastro foi concluído com sucesso.</p>
+          <div style={{ background: "rgba(255,255,255,0.05)", borderRadius: 14, padding: 18, marginBottom: 24, textAlign: "left" }}>
+            {[["👤","Nome",form.name],["📄","CPF",form.cpf],["📱","Celular",form.phone],["✉️","E-mail",form.email],["📍","Endereço",`${form.street}, ${form.number}${form.complement ? ` - ${form.complement}` : ""}`],["🏙","Cidade",`${form.city} - ${form.state}`]].map(([icon,label,val]) => (
+              <div key={label} style={{ display: "flex", gap: 8, marginBottom: 8, fontSize: 13 }}>
+                <span style={{ color: "#64748B", minWidth: 90 }}>{icon} {label}</span>
+                <span style={{ color: "#CBD5E1", fontWeight: 600, wordBreak: "break-all" }}>{val}</span>
+              </div>
+            ))}
+          </div>
+          <button onClick={() => onDone(form)} style={{
+            width: "100%", background: "#22D3EE", color: "#0C0F1A", border: "none",
+            borderRadius: 12, padding: 14, fontWeight: 800, fontSize: 15, cursor: "pointer", fontFamily: "inherit",
+          }}>Ir para o Login →</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── CLIENT AREA ─────────────────────────────────────────────────────────────
+
+function ClientArea({ client, orders, setOrders, onLogout }) {
+  const [tab, setTab]               = useState("pedidos"); // pedidos | solicitar
+  const [selected, setSelected]     = useState(null);
+  const [selServices, setSelServices] = useState([]);
+  const [sneakers, setSneakers]     = useState("");
+  const [brand, setBrand]           = useState("");
+  const [notes, setNotes]           = useState("");
+  const [payment, setPayment]       = useState("");
+  const [photoData, setPhotoData]   = useState(null);
+  const [submitted, setSubmitted]   = useState(false);
+  const [formErr, setFormErr]       = useState("");
+  const [ratings, setRatings]       = useState({}); // orderId -> {stars, comment, submitted}
+  const [osOrderClient, setOsOrderClient] = useState(null);
+  const [pixData, setPixData]       = useState(null);   // { qrcode, copy_and_paste, transaction_id, orderId }
+  const [pixStatus, setPixStatus]   = useState("idle"); // idle | loading | waiting | paid | error
+  const [pixError, setPixError]     = useState("");
+  const [currentOrder, setCurrentOrder] = useState(null);
+
+  const myOrders = orders.filter(o => o.cpf === client.cpf);
+  const STEPS = ["aguardando_coleta","coletado","em_lavagem","pronto","saiu_entrega","entregue"];
+
+  const totalSelected = selServices.reduce((s, id) => {
+    const svc = SERVICES.find(x => x.id === id);
+    return s + (svc ? svc.price : 0);
+  }, 0);
+
+  function toggleService(id) {
+    setSelServices(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+    setFormErr("");
+  }
+
+  function handlePhoto(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => setPhotoData(ev.target.result);
+    reader.readAsDataURL(file);
+  }
+
+  function buildOrder(id) {
+    const serviceNames = selServices.map(sid => SERVICES.find(s => s.id === sid)?.name).join(", ");
+    return {
+      id,
+      cpf: client.cpf,
+      client: client.name,
+      phone: client.phone,
+      email: client.email,
+      address: `${client.street}, ${client.number}${client.complement ? " - " + client.complement : ""} - ${client.neighborhood}, ${client.city}/${client.state}`,
+      sneakers: `${brand} ${sneakers}`,
+      qty: 1,
+      services: selServices,
+      service: selServices[0],
+      status: "aguardando_aprovacao",
+      price: totalSelected,
+      pickupDate: "",
+      deliveryDate: "",
+      notes: notes.trim(),
+      payment,
+      photo: photoData,
+      requestedAt: new Date().toISOString(),
+      serviceNames,
+      paid: false,
+    };
+  }
+
+  function resetForm() {
+    setSelServices([]); setSneakers(""); setBrand(""); setNotes(""); setPayment(""); setPhotoData(null);
+  }
+
+  async function submitRequest() {
+    if (!sneakers.trim())         { setFormErr("Informe o modelo do tênis."); return; }
+    if (!brand.trim())            { setFormErr("Informe a marca do tênis."); return; }
+    if (!photoData)               { setFormErr("Anexe uma foto do tênis."); return; }
+    if (selServices.length === 0) { setFormErr("Selecione ao menos um serviço."); return; }
+    if (!payment)                 { setFormErr("Selecione a forma de pagamento."); return; }
+
+    const order = buildOrder(genId());
+
+    if (payment === "pix") {
+      if (!BACKEND_READY) { setFormErr("PIX ainda não disponível. Escolha outra forma de pagamento."); return; }
+      setPixStatus("loading");
+      setPixError("");
+      setCurrentOrder(order);
+      setOrders(prev => [order, ...prev]);
+      setSubmitted(true);
+      resetForm();
+      try {
+        const pix = await spCreatePix(order, client);
+        if (!pix || !pix.qrcode) throw new Error(pix?.error || "Resposta inválida do gateway.");
+        setPixData({
+          qrcode:         pix.qrcode,
+          copy_and_paste: pix.copy_and_paste,
+          transaction_id: pix.transaction_id,
+          orderId:        order.id,
+        });
+        setPixStatus("waiting");
+        startPixPolling(pix.transaction_id, order.id);
+      } catch(e) {
+        // Se CORS ou erro de rede, mostra mensagem clara
+        const msg = e.message?.includes("Failed to fetch") || e.message?.includes("NetworkError")
+          ? "Erro de conexão com o gateway. Verifique se a API permite chamadas do navegador (CORS)."
+          : (e.message || "Erro ao gerar PIX. Tente novamente.");
+        setPixStatus("error");
+        setPixError(msg);
+      }
+    } else {
+      setOrders(prev => [order, ...prev]);
+      setSubmitted(true);
+      resetForm();
+    }
+  }
+
+  function startPixPolling(transactionId, orderId) {
+    let attempts = 0;
+    const maxAttempts = 72;
+    let isPaid = false;
+    const interval = setInterval(async () => {
+      attempts++;
+      try {
+        const data = await spCheckPix(transactionId);
+        if (data.status === "paid" && !isPaid) {
+          isPaid = true;
+          clearInterval(interval);
+          setPixStatus("paid");
+          setOrders(prev => prev.map(o => o.id === orderId ? { ...o, paid: true } : o));
+        }
+      } catch(e) { /* silent — CORS ou rede */ }
+      if (attempts >= maxAttempts && !isPaid) {
+        clearInterval(interval);
+        setPixStatus("expired");
+      }
+    }, 5000);
+  }
+
+  function StepBar({ status }) {
+    const activeSteps = ["aguardando_coleta","coletado","em_lavagem","pronto","saiu_entrega","entregue"];
+    if (status === "aguardando_aprovacao") {
+      return (
+        <div style={{ background: "rgba(236,72,153,0.12)", border: "1px solid rgba(236,72,153,0.3)", borderRadius: 10, padding: "10px 14px", marginTop: 14, fontSize: 13, color: "#F9A8D4" }}>
+          ⏳ Seu pedido está aguardando aprovação do atendente. Em breve entraremos em contato!
+        </div>
+      );
+    }
+    const idx = activeSteps.indexOf(status);
+    return (
+      <div style={{ display: "flex", alignItems: "center", marginTop: 14 }}>
+        {activeSteps.map((s, i) => {
+          const cfg = STATUS_CONFIG[s];
+          const done = i <= idx;
+          return (
+            <div key={s} style={{ display: "flex", alignItems: "center", flex: i < activeSteps.length - 1 ? 1 : "unset" }}>
+              <div style={{
+                width: 26, height: 26, borderRadius: "50%", flexShrink: 0,
+                border: `2px solid ${done ? cfg.color : "rgba(255,255,255,0.15)"}`,
+                background: i === idx ? cfg.color : done ? cfg.bg + "33" : "transparent",
+                display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11,
+              }}>{done ? cfg.icon : ""}</div>
+              {i < activeSteps.length - 1 && (
+                <div style={{ flex: 1, height: 2, background: done && i < idx ? cfg.color : "rgba(255,255,255,0.1)" }} />
+              )}
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
+  return (
+    <div style={{
+      minHeight: "100vh", background: "linear-gradient(135deg,#0C0F1A 0%,#0E2440 100%)",
+      display: "flex", flexDirection: "column", alignItems: "center",
+      padding: "40px 20px", fontFamily: "'Syne',sans-serif",
+    }}>
+      {osOrderClient && <OSModal order={osOrderClient} onClose={() => setOsOrderClient(null)} />}
+      {/* Header */}
+      <div style={{ textAlign: "center", marginBottom: 24, width: "100%", maxWidth: 520 }}>
+        <div style={{ fontSize: 36, marginBottom: 6 }}>👟✨</div>
+        <h1 style={{ fontSize: 30, fontWeight: 800, color: "#fff", margin: 0, letterSpacing: -1 }}>
+          <span style={{ color: "#22D3EE" }}>Magyk</span>Clean
+        </h1>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10, marginTop: 14 }}>
+          <div style={{ background: "rgba(34,211,238,0.15)", border: "1px solid rgba(34,211,238,0.3)", borderRadius: 20, padding: "6px 14px", display: "flex", alignItems: "center", gap: 8 }}>
+            <div style={{ width: 22, height: 22, borderRadius: "50%", background: "#22D3EE", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11 }}>👤</div>
+            <span style={{ color: "#22D3EE", fontWeight: 700, fontSize: 13 }}>{client.name.split(" ")[0]}</span>
+          </div>
+          <button onClick={onLogout} style={{ background: "rgba(255,255,255,0.08)", color: "#64748B", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 20, padding: "6px 14px", fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>Sair</button>
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 24, background: "rgba(255,255,255,0.06)", borderRadius: 14, padding: 6, width: "100%", maxWidth: 520 }}>
+        {[["pedidos","📋 Pedidos"],["historico","📖 Histórico"],["solicitar","➕ Solicitar"]].map(([t, l]) => (
+          <button key={t} onClick={() => { setTab(t); setSubmitted(false); }} style={{
+            flex: 1, padding: "10px 0", borderRadius: 10, border: "none", cursor: "pointer",
+            background: tab === t ? "#22D3EE" : "transparent",
+            color: tab === t ? "#0C0F1A" : "#94A3B8",
+            fontWeight: 700, fontSize: 13, fontFamily: "inherit", transition: "all .15s",
+          }}>{l}</button>
+        ))}
+      </div>
+
+      <div style={{ width: "100%", maxWidth: 520 }}>
+
+        {/* TAB: MEUS PEDIDOS */}
+        {tab === "pedidos" && (
+          <div>
+            {myOrders.length === 0 ? (
+              <div style={{ textAlign: "center", padding: "48px 20px" }}>
+                <div style={{ fontSize: 48, marginBottom: 12 }}>👟</div>
+                <div style={{ fontSize: 16, fontWeight: 700, color: "#fff" }}>Nenhum pedido ainda</div>
+                <div style={{ fontSize: 13, color: "#64748B", marginTop: 6 }}>Solicite seu primeiro serviço na aba ao lado!</div>
+                <button onClick={() => setTab("solicitar")} style={{ marginTop: 16, background: "#22D3EE", color: "#0C0F1A", border: "none", borderRadius: 12, padding: "10px 24px", fontWeight: 800, fontSize: 14, cursor: "pointer", fontFamily: "inherit" }}>➕ Solicitar Serviço</button>
+              </div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                {myOrders.map(o => (
+                  <div key={o.id}
+                    onClick={() => setSelected(selected?.id === o.id ? null : o)}
+                    style={{ background: "rgba(255,255,255,0.06)", borderRadius: 18, padding: 20, cursor: "pointer", border: selected?.id === o.id ? "1.5px solid #22D3EE" : "1px solid rgba(255,255,255,0.1)" }}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                      <div>
+                        <div style={{ fontWeight: 700, fontSize: 15, color: "#fff" }}>{o.sneakers}</div>
+                        <div style={{ fontSize: 12, color: "#64748B", marginTop: 2 }}>{o.id}</div>
+                        {o.serviceNames && <div style={{ fontSize: 11, color: "#94A3B8", marginTop: 3 }}>{o.serviceNames}</div>}
+                      </div>
+                      <StatusBadge status={o.status} />
+                    </div>
+                    {selected?.id === o.id && (
+                      <div style={{ marginTop: 12 }}>
+                        <StepBar status={o.status} />
+                        <div style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 6 }}>
+                          {[
+                            ["💰 Total", `R$ ${Number(o.price).toFixed(2)}`],
+                            ...(o.pickupDate ? [["📅 Coleta", o.pickupDate]] : []),
+                            ...(o.deliveryDate ? [["🚚 Entrega prevista", o.deliveryDate]] : []),
+                          ].map(([k, v]) => (
+                            <div key={k} style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+                              <span style={{ color: "#94A3B8" }}>{k}</span>
+                              <span style={{ color: "#fff", fontWeight: 600 }}>{v}</span>
+                            </div>
+                          ))}
+                          {o.notes && <div style={{ background: "rgba(245,158,11,0.15)", borderRadius: 8, padding: 8, fontSize: 12, color: "#FCD34D", marginTop: 4 }}>📝 {o.notes}</div>}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* TAB: SOLICITAR SERVIÇO */}
+        {tab === "historico" && (
+          <div>
+            {myOrders.length === 0 ? (
+              <div style={{ textAlign: "center", padding: "48px 20px" }}>
+                <div style={{ fontSize: 48, marginBottom: 12 }}>📖</div>
+                <div style={{ fontSize: 16, fontWeight: 700, color: "#fff" }}>Nenhum histórico ainda</div>
+                <div style={{ fontSize: 13, color: "#64748B", marginTop: 4 }}>Seu histórico de serviços aparecerá aqui</div>
+              </div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+                {myOrders.map(o => {
+                  const r = ratings[o.id] || {};
+                  const payLabel = {pix:"PIX",credito:"Crédito",debito:"Débito",dinheiro:"Dinheiro"}[o.payment] || "";
+                  return (
+                    <div key={o.id} style={{ background: "rgba(255,255,255,0.06)", borderRadius: 18, padding: 20, border: "1px solid rgba(255,255,255,0.1)" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
+                        <div>
+                          <div style={{ fontWeight: 800, fontSize: 16, color: "#fff" }}>{o.sneakers}</div>
+                          <div style={{ fontSize: 12, color: "#64748B", marginTop: 2 }}>{o.id} · {o.requestedAt ? new Date(o.requestedAt).toLocaleDateString("pt-BR") : ""}</div>
+                        </div>
+                        <StatusBadge status={o.status} />
+                      </div>
+                      {o.serviceNames && (
+                        <div style={{ background: "rgba(34,211,238,0.08)", borderRadius: 10, padding: "8px 12px", marginBottom: 10 }}>
+                          <div style={{ fontSize: 11, color: "#22D3EE", fontWeight: 700, marginBottom: 4 }}>SERVIÇOS</div>
+                          <div style={{ fontSize: 13, color: "#CBD5E1" }}>{o.serviceNames}</div>
+                        </div>
+                      )}
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 8 }}>
+                        <span style={{ color: "#64748B" }}>💰 Total</span>
+                        <span style={{ color: "#22D3EE", fontWeight: 800 }}>R$ {Number(o.price).toFixed(2)}</span>
+                      </div>
+                      {payLabel && (
+                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 10 }}>
+                          <span style={{ color: "#64748B" }}>💳 Pagamento</span>
+                          <span style={{ color: "#fff", fontWeight: 600 }}>{payLabel}</span>
+                        </div>
+                      )}
+                      {o.photo && (
+                        <img src={o.photo} alt="Tênis" style={{ width: "100%", borderRadius: 10, maxHeight: 140, objectFit: "cover", marginBottom: 10, border: "1px solid rgba(255,255,255,0.1)" }} />
+                      )}
+                      <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)", paddingTop: 10, marginTop: 10 }}>
+                        {o.paid ? (
+                          <button onClick={() => setOsOrderClient(o)} style={{ width: "100%", background: "rgba(34,211,238,0.1)", color: "#22D3EE", border: "1px solid rgba(34,211,238,0.3)", borderRadius: 10, padding: "9px 0", fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: "inherit", marginBottom: 8 }}>
+                            🖨 Gerar Ordem de Serviço
+                          </button>
+                        ) : (
+                          <div style={{ width: "100%", background: "rgba(248,113,113,0.08)", border: "1px solid rgba(248,113,113,0.2)", borderRadius: 10, padding: "9px 0", fontWeight: 700, fontSize: 13, textAlign: "center", color: "#F87171", marginBottom: 8, boxSizing: "border-box" }}>
+                            🔒 OS disponível após confirmação do pagamento
+                          </div>
+                        )}
+                      </div>
+                      {o.status === "entregue" && (
+                        <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)", paddingTop: 12 }}>
+                          {r.submitted ? (
+                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                              <div style={{ display: "flex", gap: 3 }}>
+                                {[1,2,3,4,5].map(s => <span key={s} style={{ fontSize: 18, opacity: s <= r.stars ? 1 : 0.25 }}>⭐</span>)}
+                              </div>
+                              <span style={{ fontSize: 12, color: "#10B981", fontWeight: 700 }}>Avaliação enviada!</span>
+                            </div>
+                          ) : (
+                            <div>
+                              <div style={{ fontSize: 12, color: "#94A3B8", fontWeight: 700, marginBottom: 8 }}>AVALIE ESTE SERVIÇO</div>
+                              <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+                                {[1,2,3,4,5].map(s => (
+                                  <button key={s} onClick={() => setRatings(prev => ({...prev, [o.id]: {...(prev[o.id]||{}), stars: s}}))} style={{
+                                    fontSize: 24, background: "none", border: "none", cursor: "pointer", padding: 0,
+                                    opacity: (r.stars||0) >= s ? 1 : 0.25, transition: "opacity .1s",
+                                  }}>⭐</button>
+                                ))}
+                              </div>
+                              {r.stars && (
+                                <>
+                                  <input placeholder="Deixe um comentário (opcional)..." value={r.comment||""} onChange={e => setRatings(prev => ({...prev, [o.id]: {...(prev[o.id]||{}), comment: e.target.value}}))}
+                                    style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: "1.5px solid rgba(255,255,255,0.15)", background: "rgba(255,255,255,0.07)", color: "#fff", fontSize: 13, fontFamily: "inherit", boxSizing: "border-box", outline: "none", marginBottom: 8 }} />
+                                  <button onClick={() => setRatings(prev => ({...prev, [o.id]: {...(prev[o.id]||{}), submitted: true}}))} style={{
+                                    background: "#22D3EE", color: "#0C0F1A", border: "none", borderRadius: 10,
+                                    padding: "9px 20px", fontWeight: 800, fontSize: 13, cursor: "pointer", fontFamily: "inherit",
+                                  }}>Enviar Avaliação ⭐</button>
+                                </>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {tab === "solicitar" && (
+          <div>
+            {submitted ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+                {/* PIX loading */}
+                {pixStatus === "loading" && (
+                  <div style={{ textAlign: "center", padding: "48px 20px" }}>
+                    <div style={{ fontSize: 48, marginBottom: 16 }}>⏳</div>
+                    <h2 style={{ color: "#fff", fontSize: 20, fontWeight: 800, margin: "0 0 8px" }}>Gerando PIX...</h2>
+                    <p style={{ color: "#94A3B8", fontSize: 14 }}>Conectando ao gateway de pagamento</p>
+                  </div>
+                )}
+
+                {/* PIX error */}
+                {pixStatus === "error" && (
+                  <div style={{ textAlign: "center", padding: "32px 20px" }}>
+                    <div style={{ fontSize: 48, marginBottom: 12 }}>❌</div>
+                    <h2 style={{ color: "#F87171", fontSize: 18, fontWeight: 800, margin: "0 0 8px" }}>Erro ao gerar PIX</h2>
+                    <p style={{ color: "#94A3B8", fontSize: 13, margin: "0 0 20px" }}>{pixError}</p>
+                    <button onClick={() => { setSubmitted(false); setPixStatus("idle"); }} style={{ background: "#22D3EE", color: "#0C0F1A", border: "none", borderRadius: 12, padding: "10px 24px", fontWeight: 800, fontSize: 14, cursor: "pointer", fontFamily: "inherit" }}>Tentar novamente</button>
+                  </div>
+                )}
+
+                {/* PIX QR Code waiting */}
+                {(pixStatus === "waiting" || pixStatus === "expired") && pixData && (
+                  <div style={{ background: "rgba(255,255,255,0.05)", borderRadius: 20, padding: 24, border: "1px solid rgba(255,255,255,0.1)" }}>
+                    <div style={{ textAlign: "center", marginBottom: 20 }}>
+                      <div style={{ fontSize: 32, marginBottom: 8 }}>🔵</div>
+                      <h2 style={{ color: "#fff", fontSize: 20, fontWeight: 800, margin: "0 0 4px" }}>Pague com PIX</h2>
+                      <p style={{ color: "#94A3B8", fontSize: 13 }}>Escaneie o QR Code ou copie o código</p>
+                    </div>
+                    {/* QR Code */}
+                    <div style={{ display: "flex", justifyContent: "center", marginBottom: 16 }}>
+                      <div style={{ background: "#fff", borderRadius: 16, padding: 12 }}>
+                        <img src={pixData.qrcode} alt="QR Code PIX" style={{ width: 200, height: 200, display: "block" }} />
+                      </div>
+                    </div>
+                    {/* Copy & Paste */}
+                    <div style={{ background: "rgba(255,255,255,0.07)", borderRadius: 12, padding: "12px 14px", marginBottom: 14 }}>
+                      <div style={{ fontSize: 10, color: "#64748B", fontWeight: 700, marginBottom: 6, letterSpacing: 0.5 }}>PIX COPIA E COLA</div>
+                      <div style={{ fontSize: 11, color: "#94A3B8", wordBreak: "break-all", marginBottom: 8 }}>{pixData.copy_and_paste}</div>
+                      <button onClick={() => navigator.clipboard.writeText(pixData.copy_and_paste)} style={{ background: "#22D3EE", color: "#0C0F1A", border: "none", borderRadius: 8, padding: "7px 16px", fontWeight: 800, fontSize: 12, cursor: "pointer", fontFamily: "inherit", width: "100%" }}>
+                        📋 Copiar Código
+                      </button>
+                    </div>
+                    {/* Status */}
+                    {pixStatus === "waiting" && (
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, background: "rgba(34,211,238,0.08)", borderRadius: 10, padding: "10px 14px", fontSize: 13, color: "#22D3EE" }}>
+                        <span style={{ animation: "spin 1s linear infinite", display: "inline-block" }}>🔄</span> Aguardando pagamento...
+                      </div>
+                    )}
+                    {pixStatus === "expired" && (
+                      <div style={{ textAlign: "center", color: "#F87171", fontSize: 13, marginTop: 8 }}>
+                        ⏰ QR Code expirado. <span onClick={() => { setSubmitted(false); setPixStatus("idle"); }} style={{ textDecoration: "underline", cursor: "pointer" }}>Gerar novo pedido</span>
+                      </div>
+                    )}
+                    <div style={{ textAlign: "center", marginTop: 10, fontSize: 12, color: "#475569" }}>
+                      Valor: <strong style={{ color: "#22D3EE" }}>R$ {currentOrder ? Number(currentOrder.price).toFixed(2) : "0,00"}</strong>
+                    </div>
+                  </div>
+                )}
+
+                {/* PIX Pago! */}
+                {pixStatus === "paid" && (
+                  <div style={{ textAlign: "center", padding: "40px 20px" }}>
+                    <div style={{ fontSize: 56, marginBottom: 16 }}>✅</div>
+                    <h2 style={{ color: "#10B981", fontSize: 22, fontWeight: 800, margin: "0 0 8px" }}>Pagamento confirmado!</h2>
+                    <p style={{ color: "#94A3B8", fontSize: 14, margin: "0 0 24px" }}>PIX recebido com sucesso. Seu pedido está confirmado!</p>
+                    <div style={{ display: "flex", gap: 10, justifyContent: "center" }}>
+                      <button onClick={() => { setSubmitted(false); setPixStatus("idle"); setPixData(null); }} style={{ background: "#22D3EE22", color: "#22D3EE", border: "1px solid #22D3EE44", borderRadius: 12, padding: "10px 20px", fontWeight: 700, fontSize: 14, cursor: "pointer", fontFamily: "inherit" }}>➕ Novo Pedido</button>
+                      <button onClick={() => { setTab("pedidos"); setSubmitted(false); setPixStatus("idle"); }} style={{ background: "#22D3EE", color: "#0C0F1A", border: "none", borderRadius: 12, padding: "10px 20px", fontWeight: 800, fontSize: 14, cursor: "pointer", fontFamily: "inherit" }}>📋 Ver Pedidos</button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Non-PIX success */}
+                {pixStatus === "idle" && (
+                  <div style={{ textAlign: "center", padding: "40px 20px" }}>
+                    <div style={{ fontSize: 56, marginBottom: 16 }}>🎉</div>
+                    <h2 style={{ color: "#fff", fontSize: 22, fontWeight: 800, margin: "0 0 8px" }}>Pedido enviado!</h2>
+                    <p style={{ color: "#94A3B8", fontSize: 14, margin: "0 0 24px" }}>Seu pedido foi recebido! O pagamento será realizado na entrega.</p>
+                    <div style={{ display: "flex", gap: 10, justifyContent: "center" }}>
+                      <button onClick={() => { setSubmitted(false); }} style={{ background: "#22D3EE22", color: "#22D3EE", border: "1px solid #22D3EE44", borderRadius: 12, padding: "10px 20px", fontWeight: 700, fontSize: 14, cursor: "pointer", fontFamily: "inherit" }}>➕ Novo Pedido</button>
+                      <button onClick={() => { setTab("pedidos"); setSubmitted(false); }} style={{ background: "#22D3EE", color: "#0C0F1A", border: "none", borderRadius: 12, padding: "10px 20px", fontWeight: 800, fontSize: 14, cursor: "pointer", fontFamily: "inherit" }}>📋 Ver Pedidos</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+
+                {/* Tênis info */}
+                <div style={{ background: "rgba(255,255,255,0.05)", borderRadius: 18, padding: 20, border: "1px solid rgba(255,255,255,0.1)" }}>
+                  <h3 style={{ color: "#fff", fontSize: 15, fontWeight: 700, margin: "0 0 14px" }}>👟 Informações do Tênis</h3>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                    <div>
+                      <label style={{ fontSize: 11, fontWeight: 700, color: "#64748B", letterSpacing: 0.5, display: "block", marginBottom: 4 }}>MARCA *</label>
+                      <input placeholder="Ex: Nike, Adidas, Vans..." value={brand} onChange={e => { setBrand(e.target.value); setFormErr(""); }}
+                        style={{ width: "100%", padding: "11px 14px", borderRadius: 10, border: `1.5px solid ${formErr && !brand ? "#F87171" : "rgba(255,255,255,0.15)"}`, background: "rgba(255,255,255,0.07)", color: "#fff", fontSize: 14, fontFamily: "inherit", boxSizing: "border-box", outline: "none" }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 11, fontWeight: 700, color: "#64748B", letterSpacing: 0.5, display: "block", marginBottom: 4 }}>MODELO *</label>
+                      <input placeholder="Ex: Air Max 90, Stan Smith..." value={sneakers} onChange={e => { setSneakers(e.target.value); setFormErr(""); }}
+                        style={{ width: "100%", padding: "11px 14px", borderRadius: 10, border: `1.5px solid ${formErr && !sneakers ? "#F87171" : "rgba(255,255,255,0.15)"}`, background: "rgba(255,255,255,0.07)", color: "#fff", fontSize: 14, fontFamily: "inherit", boxSizing: "border-box", outline: "none" }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 11, fontWeight: 700, color: "#64748B", letterSpacing: 0.5, display: "block", marginBottom: 4 }}>OBSERVAÇÕES <span style={{ color: "#475569", fontWeight: 400 }}>(opcional)</span></label>
+                      <input placeholder="Ex: manchas específicas, cor, material..." value={notes} onChange={e => setNotes(e.target.value)}
+                        style={{ width: "100%", padding: "11px 14px", borderRadius: 10, border: "1.5px solid rgba(255,255,255,0.15)", background: "rgba(255,255,255,0.07)", color: "#fff", fontSize: 14, fontFamily: "inherit", boxSizing: "border-box", outline: "none" }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 11, fontWeight: 700, color: "#64748B", letterSpacing: 0.5, display: "block", marginBottom: 4 }}>FOTO DO TÊNIS * <span style={{ color: "#475569", fontWeight: 400 }}>(obrigatória)</span></label>
+                      {!photoData ? (
+                        <label style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8, padding: "20px", borderRadius: 12, cursor: "pointer", border: "2px dashed rgba(255,255,255,0.2)", background: "rgba(255,255,255,0.04)" }}>
+                          <span style={{ fontSize: 30 }}>📷</span>
+                          <span style={{ fontSize: 13, color: "#94A3B8", fontWeight: 600 }}>Tirar ou anexar foto</span>
+                          <input type="file" accept="image/*" capture="environment" onChange={handlePhoto} style={{ display: "none" }} />
+                        </label>
+                      ) : (
+                        <div style={{ position: "relative" }}>
+                          <img src={photoData} alt="Tênis" style={{ width: "100%", borderRadius: 12, maxHeight: 200, objectFit: "cover", border: "1.5px solid #10B98166" }} />
+                          <button onClick={() => setPhotoData(null)} style={{ position: "absolute", top: 8, right: 8, background: "rgba(0,0,0,0.65)", border: "none", borderRadius: "50%", width: 28, height: 28, color: "#fff", cursor: "pointer", fontSize: 13 }}>✕</button>
+                          <div style={{ fontSize: 11, color: "#10B981", marginTop: 5 }}>✅ Foto adicionada</div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Services selection */}
+                <div style={{ background: "rgba(255,255,255,0.05)", borderRadius: 18, padding: 20, border: "1px solid rgba(255,255,255,0.1)" }}>
+                  <h3 style={{ color: "#fff", fontSize: 15, fontWeight: 700, margin: "0 0 4px" }}>🧼 Selecione os Serviços</h3>
+                  <p style={{ color: "#64748B", fontSize: 12, margin: "0 0 14px" }}>Você pode selecionar mais de um serviço</p>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    {SERVICES.map(svc => {
+                      const sel = selServices.includes(svc.id);
+                      return (
+                        <div key={svc.id} onClick={() => toggleService(svc.id)} style={{
+                          padding: "13px 16px", borderRadius: 12, cursor: "pointer",
+                          border: `1.5px solid ${sel ? "#22D3EE" : "rgba(255,255,255,0.1)"}`,
+                          background: sel ? "rgba(34,211,238,0.1)" : "rgba(255,255,255,0.03)",
+                          display: "flex", justifyContent: "space-between", alignItems: "center",
+                          transition: "all .15s",
+                        }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                            <div style={{
+                              width: 22, height: 22, borderRadius: 6, flexShrink: 0,
+                              border: `2px solid ${sel ? "#22D3EE" : "rgba(255,255,255,0.2)"}`,
+                              background: sel ? "#22D3EE" : "transparent",
+                              display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12,
+                            }}>{sel ? "✓" : ""}</div>
+                            <div>
+                              <div style={{ fontWeight: 700, color: sel ? "#fff" : "#CBD5E1", fontSize: 14 }}>{svc.icon} {svc.name}</div>
+                              <div style={{ fontSize: 11, color: "#64748B" }}>{svc.desc}</div>
+                            </div>
+                          </div>
+                          <div style={{ fontWeight: 800, color: sel ? "#22D3EE" : "#475569", fontSize: 15, flexShrink: 0, marginLeft: 8 }}>
+                            R$ {svc.price.toFixed(2)}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Summary & submit */}
+                {selServices.length > 0 && (
+                  <div style={{ background: "rgba(34,211,238,0.08)", border: "1px solid rgba(34,211,238,0.25)", borderRadius: 16, padding: 18 }}>
+                    <div style={{ fontSize: 13, color: "#94A3B8", fontWeight: 600, marginBottom: 10 }}>RESUMO DO PEDIDO</div>
+                    {selServices.map(id => {
+                      const svc = SERVICES.find(s => s.id === id);
+                      return (
+                        <div key={id} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 6 }}>
+                          <span style={{ color: "#CBD5E1" }}>{svc.icon} {svc.name}</span>
+                          <span style={{ color: "#fff", fontWeight: 600 }}>R$ {svc.price.toFixed(2)}</span>
+                        </div>
+                      );
+                    })}
+                    <div style={{ borderTop: "1px solid rgba(255,255,255,0.1)", marginTop: 10, paddingTop: 10, display: "flex", justifyContent: "space-between" }}>
+                      <span style={{ color: "#fff", fontWeight: 700, fontSize: 15 }}>Total</span>
+                      <span style={{ color: "#22D3EE", fontWeight: 800, fontSize: 18 }}>R$ {totalSelected.toFixed(2)}</span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Payment method */}
+                <div style={{ background: "rgba(255,255,255,0.05)", borderRadius: 18, padding: 20, border: "1px solid rgba(255,255,255,0.1)" }}>
+                  <h3 style={{ color: "#fff", fontSize: 15, fontWeight: 700, margin: "0 0 4px" }}>💳 Forma de Pagamento</h3>
+                  <p style={{ color: "#64748B", fontSize: 12, margin: "0 0 14px" }}>
+                    {BACKEND_READY ? "PIX com confirmação automática • Outros na entrega" : "Pagamento realizado na entrega"}
+                  </p>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    {[
+                      { id: "pix",      icon: "🔵", label: "PIX",     sub: "Confirmação automática", pixOnly: true },
+                      { id: "credito",  icon: "💳", label: "Crédito", sub: "Na maquininha" },
+                      { id: "debito",   icon: "💳", label: "Débito",  sub: "Na maquininha" },
+                      { id: "dinheiro", icon: "💵", label: "Dinheiro",sub: "Pagamento em espécie" },
+                    ].map(p => {
+                      const disabled = p.pixOnly && !BACKEND_READY;
+                      const sel = payment === p.id;
+                      return (
+                        <div key={p.id}
+                          onClick={() => { if (!disabled) { setPayment(p.id); setFormErr(""); } }}
+                          style={{
+                            padding: "12px 14px", borderRadius: 12,
+                            cursor: disabled ? "not-allowed" : "pointer",
+                            border: `1.5px solid ${sel ? "#22D3EE" : disabled ? "rgba(255,255,255,0.05)" : "rgba(255,255,255,0.1)"}`,
+                            background: sel ? "rgba(34,211,238,0.1)" : disabled ? "rgba(255,255,255,0.01)" : "rgba(255,255,255,0.03)",
+                            opacity: disabled ? 0.45 : 1,
+                            transition: "all .15s", position: "relative",
+                          }}>
+                          <div style={{ fontSize: 20, marginBottom: 4 }}>{p.icon}</div>
+                          <div style={{ fontWeight: 700, color: sel ? "#fff" : disabled ? "#475569" : "#CBD5E1", fontSize: 13 }}>{p.label}</div>
+                          <div style={{ fontSize: 11, color: "#64748B", marginTop: 2 }}>{disabled ? "Em breve" : p.sub}</div>
+                          {sel && <div style={{ fontSize: 10, color: "#22D3EE", fontWeight: 700, marginTop: 4 }}>✓ Selecionado</div>}
+                          {disabled && <div style={{ position: "absolute", top: 6, right: 8, fontSize: 9, fontWeight: 700, color: "#F59E0B", background: "rgba(245,158,11,0.15)", borderRadius: 6, padding: "2px 6px" }}>EM BREVE</div>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {formErr && (
+                  <div style={{ background: "rgba(248,113,113,0.12)", border: "1px solid rgba(248,113,113,0.3)", borderRadius: 10, padding: "10px 14px", fontSize: 13, color: "#F87171" }}>
+                    ⚠ {formErr}
+                  </div>
+                )}
+
+                <button onClick={submitRequest} style={{
+                  background: payment === "pix" ? "#22C55E" : "#22D3EE",
+                  color: "#0C0F1A", border: "none", borderRadius: 14,
+                  padding: 16, fontWeight: 800, fontSize: 16, cursor: "pointer", fontFamily: "inherit",
+                  transition: "background .2s",
+                }}>
+                  {payment === "pix"
+                    ? `🔵 Efetuar Pagamento PIX${selServices.length > 0 ? ` · R$ ${totalSelected.toFixed(2)}` : ""}`
+                    : `Enviar Solicitação${selServices.length > 0 ? ` · R$ ${totalSelected.toFixed(2)}` : ""}`
+                  }
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+// ─── ADMIN PANEL ─────────────────────────────────────────────────────────────
+
+function AdminPanel({ orders, setOrders, clients }) {
+  const [view, setView]           = useState("dashboard");
+  const [selOrder, setSelOrder]   = useState(null);
+  const [filterStatus, setFilter] = useState("todos");
+  const [showModal, setShowModal] = useState(false);
+  const [osOrder, setOsOrder]     = useState(null);
+  const [newOrder, setNewOrder]   = useState({
+    cpf: "", client: "", phone: "", address: "",
+    sneakers: "", qty: 1, services: [], service: "",
+    status: "aguardando_coleta",
+    pickupDate: new Date().toISOString().split("T")[0],
+    deliveryDate: "", notes: "",
+  });
+
+  const stats = {
+    total:   orders.length,
+    active:  orders.filter(o => o.status !== "entregue").length,
+    pronto:  orders.filter(o => o.status === "pronto").length,
+    revenue: orders.filter(o => o.status === "entregue").reduce((s, o) => s + Number(o.price), 0),
+  };
+  const filtered = filterStatus === "todos" ? orders : orders.filter(o => o.status === filterStatus);
+
+  function changeStatus(id, s) {
+    setOrders(prev => prev.map(o => o.id === id ? { ...o, status: s } : o));
+    if (selOrder?.id === id) setSelOrder(p => ({ ...p, status: s }));
+  }
+
+  function approveOrder(id) {
+    setOrders(prev => prev.map(o => o.id === id ? { ...o, status: "aguardando_coleta" } : o));
+    if (selOrder?.id === id) setSelOrder(p => ({ ...p, status: "aguardando_coleta" }));
+  }
+
+  function markPaid(id, paid) {
+    setOrders(prev => prev.map(o => o.id === id ? { ...o, paid } : o));
+    if (selOrder?.id === id) setSelOrder(p => ({ ...p, paid }));
+  }
+
+  function printOrder(order) {
+    setOsOrder(order);
+  }
+
+  function addOrder() {
+    if (!newOrder.cpf)      { alert("Selecione um cliente cadastrado."); return; }
+    if (!newOrder.sneakers) { alert("Informe o modelo do tênis.");       return; }
+    if (!(newOrder.services || []).length) { alert("Selecione ao menos um serviço."); return; }
+    const totalPrice = (newOrder.services || []).reduce((s, id) => s + (SERVICES.find(x => x.id === id)?.price || 0), 0) * newOrder.qty;
+    const serviceNames = (newOrder.services || []).map(id => SERVICES.find(s => s.id === id)?.name).join(", ");
+    setOrders(prev => [{ ...newOrder, id: genId(), price: totalPrice, serviceNames, status: "aguardando_coleta" }, ...prev]);
+    setShowModal(false);
+    setNewOrder({ cpf: "", client: "", phone: "", address: "", sneakers: "", qty: 1, services: [], service: "", status: "aguardando_coleta", pickupDate: new Date().toISOString().split("T")[0], deliveryDate: "", notes: "" });
+  }
+
+  const nav = [
+    { id: "dashboard", icon: "📊", label: "Dashboard" },
+    { id: "orders",    icon: "👟", label: "Pedidos" },
+    { id: "clients",   icon: "👥", label: "Clientes" },
+    { id: "prices",    icon: "💰", label: "Preços" },
+    { id: "analytics", icon: "📈", label: "Relatórios" },
+  ];
+
+  const modalInp = { width: "100%", padding: "10px 12px", borderRadius: 10, border: "1px solid #E2E8F0", fontSize: 14, fontFamily: "inherit", boxSizing: "border-box", outline: "none" };
+
+  return (
+    <div style={{ display: "flex", height: "100vh", fontFamily: "'Syne',sans-serif", background: "#F8FAFC" }}>
+      {osOrder && <OSModal order={osOrder} onClose={() => setOsOrder(null)} />}
+      {/* Sidebar */}
+      <div style={{ width: 220, background: "#0C0F1A", display: "flex", flexDirection: "column", padding: "24px 0", flexShrink: 0 }}>
+        <div style={{ padding: "0 20px 28px" }}>
+          <div style={{ fontSize: 20, fontWeight: 800, color: "#fff", letterSpacing: -0.5 }}>
+            <span style={{ color: "#22D3EE" }}>Magyk</span>Clean
+          </div>
+          <div style={{ fontSize: 11, color: "#475569", marginTop: 2, fontWeight: 500 }}>PAINEL ADMIN</div>
+        </div>
+        {nav.map(item => (
+          <button key={item.id} onClick={() => setView(item.id)} style={{
+            display: "flex", alignItems: "center", gap: 10,
+            padding: "10px 20px", border: "none", cursor: "pointer",
+            background: view === item.id ? "#22D3EE18" : "transparent",
+            borderLeft: view === item.id ? "3px solid #22D3EE" : "3px solid transparent",
+            color: view === item.id ? "#22D3EE" : "#94A3B8",
+            fontSize: 14, fontWeight: 600, textAlign: "left", fontFamily: "inherit",
+          }}><span>{item.icon}</span> {item.label}</button>
+        ))}
+        <div style={{ flex: 1 }} />
+        <div style={{ padding: "16px 20px", borderTop: "1px solid #1E293B" }}>
+          <div style={{ fontSize: 12, color: "#475569" }}>Logado como</div>
+          <div style={{ fontSize: 13, color: "#94A3B8", fontWeight: 600 }}>Admin</div>
+        </div>
+      </div>
+
+      {/* Content */}
+      <div style={{ flex: 1, overflow: "auto", padding: 28 }}>
+
+        {view === "dashboard" && (
+          <div>
+            <h2 style={{ fontSize: 24, fontWeight: 800, color: "#0F172A", margin: "0 0 4px" }}>Dashboard</h2>
+            <p style={{ color: "#64748B", margin: "0 0 16px", fontSize: 14 }}>Visão geral do negócio</p>
+            {orders.filter(o => o.status === "aguardando_aprovacao").length > 0 && (
+              <div onClick={() => { setView("orders"); setFilter("aguardando_aprovacao"); }} style={{ background: "#FDF2F8", border: "1px solid #F9A8D4", borderRadius: 12, padding: "12px 16px", marginBottom: 20, cursor: "pointer", display: "flex", alignItems: "center", gap: 12 }}>
+                <div style={{ width: 36, height: 36, borderRadius: 10, background: "#FCE7F3", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>⏳</div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 700, color: "#9D174D", fontSize: 14 }}>
+                    {orders.filter(o => o.status === "aguardando_aprovacao").length} pedido(s) aguardando aprovação
+                  </div>
+                  <div style={{ fontSize: 12, color: "#BE185D" }}>Clique para revisar e aprovar</div>
+                </div>
+                <span style={{ color: "#EC4899", fontSize: 18 }}>→</span>
+              </div>
+            )}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 16, marginBottom: 28 }}>
+              {[
+                { label: "Total Pedidos", value: stats.total,   icon: "📋", color: "#3B82F6" },
+                { label: "Em Andamento",  value: stats.active,  icon: "⚡", color: "#F59E0B" },
+                { label: "Prontos",       value: stats.pronto,  icon: "✅", color: "#10B981" },
+                { label: "Faturamento",   value: `R$ ${stats.revenue.toFixed(2)}`, icon: "💵", color: "#8B5CF6" },
+              ].map(s => (
+                <div key={s.label} style={{ background: "#fff", borderRadius: 16, padding: "20px 24px", border: "1px solid #F1F5F9", display: "flex", alignItems: "center", gap: 16 }}>
+                  <div style={{ width: 48, height: 48, borderRadius: 14, background: s.color + "18", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22 }}>{s.icon}</div>
+                  <div>
+                    <div style={{ fontSize: 24, fontWeight: 800, color: "#0F172A", lineHeight: 1 }}>{s.value}</div>
+                    <div style={{ fontSize: 13, color: "#64748B", marginTop: 2 }}>{s.label}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <h3 style={{ fontSize: 16, fontWeight: 700, color: "#0F172A", margin: "0 0 12px" }}>Pedidos Recentes</h3>
+            <div style={{ background: "#fff", borderRadius: 16, border: "1px solid #F1F5F9", overflow: "hidden" }}>
+              {orders.length === 0 ? (
+                <div style={{ padding: 40, textAlign: "center", color: "#94A3B8" }}>
+                  <div style={{ fontSize: 32, marginBottom: 8 }}>📋</div>
+                  <div style={{ fontWeight: 600 }}>Nenhum pedido ainda</div>
+                </div>
+              ) : orders.slice(0, 5).map((o, i) => (
+                <div key={o.id} onClick={() => { setSelOrder(o); setView("orders"); }}
+                  style={{ display: "flex", alignItems: "center", padding: "14px 20px", borderBottom: i < 4 ? "1px solid #F1F5F9" : "none", cursor: "pointer", gap: 14 }}
+                  onMouseEnter={e => e.currentTarget.style.background = "#F8FAFC"}
+                  onMouseLeave={e => e.currentTarget.style.background = "#fff"}
+                >
+                  <div style={{ width: 36, height: 36, borderRadius: 10, background: "#F1F5F9", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>👟</div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 700, fontSize: 14, color: "#0F172A" }}>{o.client}</div>
+                    <div style={{ fontSize: 12, color: "#94A3B8" }}>{o.sneakers}</div>
+                  </div>
+                  <StatusBadge status={o.status} />
+                  <div style={{ fontSize: 14, fontWeight: 700, color: "#0F172A" }}>R$ {Number(o.price).toFixed(2)}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {view === "orders" && (
+          <div style={{ display: "flex", gap: 20 }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+                <h2 style={{ fontSize: 22, fontWeight: 800, color: "#0F172A", margin: 0 }}>Pedidos</h2>
+                <button onClick={() => setShowModal(true)} style={{
+                  background: "#22D3EE", color: "#0C0F1A", border: "none", borderRadius: 10,
+                  padding: "10px 18px", fontWeight: 800, fontSize: 13, cursor: "pointer", fontFamily: "inherit",
+                }}>+ Novo Pedido</button>
+              </div>
+              <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+                {[{ v: "todos", l: "Todos" }, ...Object.entries(STATUS_CONFIG).map(([v, c]) => ({ v, l: c.icon + " " + c.label }))].map(f => (
+                  <button key={f.v} onClick={() => setFilter(f.v)} style={{
+                    padding: "5px 12px", borderRadius: 20, border: "1px solid",
+                    borderColor: filterStatus === f.v ? "#22D3EE" : "#E2E8F0",
+                    background: filterStatus === f.v ? "#22D3EE18" : "#fff",
+                    color: filterStatus === f.v ? "#0891B2" : "#64748B",
+                    fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
+                  }}>{f.l}</button>
+                ))}
+              </div>
+              {filtered.length === 0 ? (
+                <div style={{ background: "#fff", borderRadius: 14, border: "1px solid #F1F5F9", padding: 48, textAlign: "center", color: "#94A3B8" }}>
+                  <div style={{ fontSize: 32, marginBottom: 8 }}>👟</div>
+                  <div style={{ fontWeight: 600 }}>Nenhum pedido encontrado</div>
+                </div>
+              ) : filtered.map(o => (
+                <div key={o.id} onClick={() => setSelOrder(selOrder?.id === o.id ? null : o)} style={{
+                  background: selOrder?.id === o.id ? "#F0FDFE" : "#fff",
+                  border: selOrder?.id === o.id ? "1.5px solid #22D3EE" : "1px solid #F1F5F9",
+                  borderRadius: 14, padding: "14px 18px", cursor: "pointer",
+                  display: "flex", alignItems: "center", gap: 12, marginBottom: 10,
+                }}>
+                  <div style={{ fontSize: 22 }}>👟</div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 700, fontSize: 15, color: "#0F172A" }}>
+                      {o.client} <span style={{ fontSize: 11, color: "#94A3B8", fontWeight: 400 }}>{o.id}</span>
+                    </div>
+                    <div style={{ fontSize: 13, color: "#64748B" }}>{o.sneakers} · {o.qty} par(es)</div>
+                  </div>
+                  <StatusBadge status={o.status} />
+                  <div style={{ textAlign: "right" }}>
+                    <div style={{ fontWeight: 800, fontSize: 15, color: "#0F172A" }}>R$ {Number(o.price).toFixed(2)}</div>
+                    <div style={{ fontSize: 11, color: "#94A3B8" }}>{o.deliveryDate}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {selOrder && (
+              <div style={{ width: 300, background: "#fff", borderRadius: 18, border: "1px solid #F1F5F9", padding: 20, height: "fit-content", position: "sticky", top: 0 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                  <span style={{ fontWeight: 800, fontSize: 16, color: "#0F172A" }}>Detalhes</span>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <button
+                      onClick={() => selOrder.paid ? printOrder(selOrder) : null}
+                      title={selOrder.paid ? "Gerar Ordem de Serviço" : "Marque como pago para gerar OS"}
+                      style={{ border: "none", borderRadius: 8, padding: "4px 10px", cursor: selOrder.paid ? "pointer" : "not-allowed", fontSize: 14, fontWeight: 700,
+                        background: selOrder.paid ? "#22D3EE18" : "#F1F5F9",
+                        color: selOrder.paid ? "#0891B2" : "#94A3B8",
+                        opacity: selOrder.paid ? 1 : 0.6,
+                      }}>🖨 OS</button>
+                    <button onClick={() => setSelOrder(null)} style={{ border: "none", background: "#F1F5F9", borderRadius: 8, padding: "4px 10px", cursor: "pointer", fontSize: 14 }}>✕</button>
+                  </div>
+                </div>
+                <div style={{ background: "#F8FAFC", borderRadius: 12, padding: 14, marginBottom: 14 }}>
+                  <div style={{ fontSize: 11, color: "#94A3B8", fontWeight: 600, marginBottom: 4 }}>PEDIDO</div>
+                  <div style={{ fontWeight: 800, fontSize: 18, color: "#0F172A", marginBottom: 6 }}>{selOrder.id}</div>
+                  <StatusBadge status={selOrder.status} />
+                </div>
+                <div style={{ fontSize: 13, display: "flex", flexDirection: "column", gap: 8, marginBottom: 16 }}>
+                  {[["👤 Cliente", selOrder.client],["📱 Telefone", selOrder.phone],["👟 Tênis", selOrder.sneakers],["📦 Qtd", `${selOrder.qty} par(es)`],["📍 Endereço", selOrder.address],["📅 Coleta", selOrder.pickupDate],["🚚 Entrega", selOrder.deliveryDate],["💰 Valor", `R$ ${Number(selOrder.price).toFixed(2)}`]].map(([k, v]) => (
+                    <div key={k} style={{ display: "flex", gap: 8 }}>
+                      <span style={{ color: "#94A3B8", minWidth: 86, flexShrink: 0 }}>{k}</span>
+                      <span style={{ fontWeight: 600, color: "#0F172A" }}>{v}</span>
+                    </div>
+                  ))}
+                  {selOrder.notes && <div style={{ background: "#FEF3C7", borderRadius: 8, padding: 8, marginTop: 4, fontSize: 12, color: "#92400E" }}>📝 {selOrder.notes}</div>}
+                  {selOrder.payment && (
+                    <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+                      <span style={{ color: "#94A3B8", minWidth: 86, flexShrink: 0, fontSize: 13 }}>💳 Pagamento</span>
+                      <span style={{ fontWeight: 600, color: "#0F172A", fontSize: 13 }}>{({pix:'PIX',credito:'Cartão de Crédito',debito:'Cartão de Débito',dinheiro:'Dinheiro'})[selOrder.payment] || selOrder.payment}</span>
+                    </div>
+                  )}
+                  {selOrder.photo && (
+                    <div style={{ marginTop: 10 }}>
+                      <div style={{ fontSize: 11, color: "#94A3B8", fontWeight: 700, marginBottom: 6, letterSpacing: 0.5 }}>FOTO DO TÊNIS</div>
+                      <img src={selOrder.photo} alt="Tênis" style={{ width: "100%", borderRadius: 10, maxHeight: 180, objectFit: "cover", border: "1px solid #E2E8F0" }} />
+                    </div>
+                  )}
+                </div>
+                <div style={{ borderTop: "1px solid #F1F5F9", paddingTop: 14 }}>
+                  {/* Pagamento toggle */}
+                  <div style={{ marginBottom: 14 }}>
+                    <div style={{ fontSize: 11, color: "#94A3B8", fontWeight: 700, marginBottom: 8, letterSpacing: 0.5 }}>PAGAMENTO</div>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <button onClick={() => markPaid(selOrder.id, true)} style={{
+                        flex: 1, padding: "9px 0", borderRadius: 8, border: "1.5px solid",
+                        borderColor: selOrder.paid ? "#10B981" : "#E2E8F0",
+                        background: selOrder.paid ? "#D1FAE5" : "#fff",
+                        color: selOrder.paid ? "#065F46" : "#64748B",
+                        fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: "inherit",
+                      }}>✅ Pago</button>
+                      <button onClick={() => markPaid(selOrder.id, false)} style={{
+                        flex: 1, padding: "9px 0", borderRadius: 8, border: "1.5px solid",
+                        borderColor: !selOrder.paid ? "#F87171" : "#E2E8F0",
+                        background: !selOrder.paid ? "#FEE2E2" : "#fff",
+                        color: !selOrder.paid ? "#991B1B" : "#64748B",
+                        fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: "inherit",
+                      }}>❌ Pendente</button>
+                    </div>
+                    {!selOrder.paid && (
+                      <div style={{ fontSize: 11, color: "#F59E0B", marginTop: 6, background: "#FFFBEB", border: "1px solid #FDE68A", borderRadius: 6, padding: "5px 10px" }}>
+                        ⚠ A OS só pode ser gerada após marcar como pago
+                      </div>
+                    )}
+                  </div>
+                  {selOrder.status === "aguardando_aprovacao" && (
+                    <button onClick={() => approveOrder(selOrder.id)} style={{
+                      width: "100%", background: "#10B981", color: "#fff", border: "none",
+                      borderRadius: 10, padding: "11px 14px", fontWeight: 800, fontSize: 14,
+                      cursor: "pointer", fontFamily: "inherit", marginBottom: 12, display: "flex",
+                      alignItems: "center", justifyContent: "center", gap: 8,
+                    }}>✅ Aprovar Pedido</button>
+                  )}
+                  {selOrder.serviceNames && (
+                    <div style={{ background: "#F8FAFC", borderRadius: 10, padding: "10px 12px", marginBottom: 12 }}>
+                      <div style={{ fontSize: 11, color: "#94A3B8", fontWeight: 700, marginBottom: 6 }}>SERVIÇOS SOLICITADOS</div>
+                      <div style={{ fontSize: 13, color: "#0F172A", fontWeight: 600 }}>{selOrder.serviceNames}</div>
+                    </div>
+                  )}
+                  <div style={{ fontSize: 11, color: "#94A3B8", fontWeight: 700, marginBottom: 8, letterSpacing: 0.5 }}>ATUALIZAR STATUS</div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {Object.entries(STATUS_CONFIG).map(([key, cfg]) => {
+                      const isActive = selOrder.status === key;
+                      const waMsg = encodeURIComponent(
+                        `Olá ${(selOrder.client||"").split(" ")[0]}! 👟✨\n\nSeu tênis *${selOrder.sneakers}* (Pedido ${selOrder.id}) teve o status atualizado:\n\n*${cfg.icon} ${cfg.label}*\n\nQualquer dúvida estamos à disposição!\n\n— Equipe MagykClean 🧼`
+                      );
+                      const waPhone = (selOrder.phone||"").replace(/\D/g,"");
+                      const waLink = `https://wa.me/55${waPhone}?text=${waMsg}`;
+                      return (
+                        <div key={key} style={{ display: "flex", gap: 6 }}>
+                          <button onClick={() => changeStatus(selOrder.id, key)} style={{
+                            flex: 1, padding: "8px 12px", borderRadius: 8, border: "1px solid",
+                            borderColor: isActive ? cfg.color : "#E2E8F0",
+                            background: isActive ? cfg.bg : "#fff",
+                            color: isActive ? cfg.color : "#64748B",
+                            fontSize: 13, fontWeight: 600, cursor: "pointer", textAlign: "left", fontFamily: "inherit",
+                          }}>{cfg.icon} {cfg.label}</button>
+                          <a href={waLink} target="_blank" rel="noreferrer" title={`Avisar cliente: ${cfg.label}`} style={{
+                            display: "flex", alignItems: "center", justifyContent: "center",
+                            width: 34, flexShrink: 0, borderRadius: 8, textDecoration: "none",
+                            background: isActive ? "#DCFCE7" : "#F8FAFC",
+                            border: `1px solid ${isActive ? "#86EFAC" : "#E2E8F0"}`,
+                            fontSize: 15,
+                          }}>💬</a>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {view === "clients" && (
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+              <h2 style={{ fontSize: 22, fontWeight: 800, color: "#0F172A", margin: 0 }}>Clientes Cadastrados</h2>
+              <div style={{ background: "#22D3EE18", border: "1px solid #22D3EE44", borderRadius: 10, padding: "6px 14px", fontSize: 13, fontWeight: 700, color: "#0891B2" }}>
+                {(clients || []).length} cliente(s)
+              </div>
+            </div>
+            {(!clients || clients.length === 0) ? (
+              <div style={{ background: "#fff", borderRadius: 16, border: "1px solid #F1F5F9", padding: 48, textAlign: "center" }}>
+                <div style={{ fontSize: 40, marginBottom: 12 }}>👥</div>
+                <div style={{ fontSize: 16, fontWeight: 700, color: "#94A3B8" }}>Nenhum cliente cadastrado</div>
+                <div style={{ fontSize: 13, color: "#CBD5E1", marginTop: 4 }}>Os clientes aparecerão aqui após se cadastrarem</div>
+              </div>
+            ) : (
+              <div style={{ background: "#fff", borderRadius: 16, border: "1px solid #F1F5F9", overflow: "hidden" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "2fr 1.5fr 1.5fr 1.2fr 0.8fr", padding: "12px 20px", background: "#F8FAFC", fontSize: 11, fontWeight: 700, color: "#94A3B8", letterSpacing: 1 }}>
+                  <span>CLIENTE</span><span>E-MAIL</span><span>CELULAR</span><span>CPF</span><span>PEDIDOS</span>
+                </div>
+                {(clients || []).map(c => {
+                  const total = orders.filter(o => o.cpf === c.cpf).length;
+                  return (
+                    <div key={c.cpf} style={{ display: "grid", gridTemplateColumns: "2fr 1.5fr 1.5fr 1.2fr 0.8fr", padding: "14px 20px", borderTop: "1px solid #F1F5F9", alignItems: "center" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <div style={{ width: 36, height: 36, borderRadius: "50%", background: "#22D3EE18", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, flexShrink: 0 }}>👤</div>
+                        <div>
+                          <div style={{ fontWeight: 700, fontSize: 14, color: "#0F172A" }}>{c.name}</div>
+                          <div style={{ fontSize: 11, color: "#94A3B8" }}>{c.city} - {c.state}</div>
+                        </div>
+                      </div>
+                      <span style={{ fontSize: 13, color: "#64748B" }}>{c.email}</span>
+                      <span style={{ fontSize: 13, color: "#64748B" }}>{c.phone}</span>
+                      <span style={{ fontSize: 12, color: "#94A3B8" }}>{c.cpf}</span>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: total > 0 ? "#3B82F6" : "#94A3B8" }}>{total}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {view === "prices" && (
+          <div>
+            <h2 style={{ fontSize: 22, fontWeight: 800, color: "#0F172A", margin: "0 0 20px" }}>Tabela de Preços</h2>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 16 }}>
+              {SERVICES.map((svc, i) => (
+                <div key={svc.id} style={{
+                  background: i === 1 ? "#0C0F1A" : "#fff",
+                  border: i === 1 ? "2px solid #22D3EE" : "1px solid #F1F5F9",
+                  borderRadius: 20, padding: 28, position: "relative",
+                }}>
+                  {i === 1 && <div style={{ position: "absolute", top: -12, left: "50%", transform: "translateX(-50%)", background: "#22D3EE", color: "#0C0F1A", fontSize: 10, fontWeight: 800, padding: "3px 12px", borderRadius: 20 }}>MAIS POPULAR</div>}
+                  <div style={{ fontSize: 32 }}>🧼</div>
+                  <div style={{ fontSize: 18, fontWeight: 800, color: i === 1 ? "#fff" : "#0F172A", marginTop: 12 }}>{svc.name}</div>
+                  <div style={{ fontSize: 13, color: i === 1 ? "#94A3B8" : "#64748B", marginTop: 4 }}>{svc.desc}</div>
+                  <div style={{ fontSize: 30, fontWeight: 800, color: "#22D3EE", marginTop: 16 }}>R$ {svc.price.toFixed(2)}</div>
+                  <div style={{ fontSize: 12, color: i === 1 ? "#475569" : "#94A3B8" }}>por par de tênis</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+        {view === "analytics" && (() => {
+          const now = new Date();
+          const months = Array.from({length: 6}, (_, i) => {
+            const d = new Date(now.getFullYear(), now.getMonth() - (5 - i), 1);
+            return { label: d.toLocaleDateString("pt-BR", {month:"short", year:"2-digit"}), month: d.getMonth(), year: d.getFullYear() };
+          });
+          const monthData = months.map(m => {
+            const mo = orders.filter(o => {
+              const d = new Date(o.requestedAt || 0);
+              return d.getMonth() === m.month && d.getFullYear() === m.year;
+            });
+            const rev = mo.filter(o => o.status === "entregue").reduce((s,o) => s + Number(o.price), 0);
+            return { ...m, count: mo.length, revenue: rev };
+          });
+          const maxRev = Math.max(...monthData.map(m => m.revenue), 1);
+          const maxCnt = Math.max(...monthData.map(m => m.count), 1);
+
+          const topServices = SERVICES.map(svc => ({
+            ...svc,
+            count: orders.filter(o => (o.services||[]).includes(svc.id)).length
+          })).sort((a,b) => b.count - a.count).slice(0,5);
+
+          const ratings = orders.filter(o => o.clientRating).map(o => o.clientRating);
+          const avgRating = ratings.length ? (ratings.reduce((s,r)=>s+r,0)/ratings.length).toFixed(1) : "—";
+
+          return (
+            <div>
+              <h2 style={{ fontSize: 22, fontWeight: 800, color: "#0F172A", margin: "0 0 4px" }}>Relatórios</h2>
+              <p style={{ color: "#64748B", margin: "0 0 24px", fontSize: 14 }}>Últimos 6 meses</p>
+
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 14, marginBottom: 28 }}>
+                {[
+                  { label: "Total de Pedidos", value: orders.length, icon: "📋", color: "#3B82F6" },
+                  { label: "Faturamento Total", value: `R$ ${orders.filter(o=>o.status==="entregue").reduce((s,o)=>s+Number(o.price),0).toFixed(2)}`, icon: "💰", color: "#10B981" },
+                  { label: "Avaliação Média", value: avgRating === "—" ? "—" : `${avgRating} ⭐`, icon: "⭐", color: "#F59E0B" },
+                ].map(s => (
+                  <div key={s.label} style={{ background: "#fff", borderRadius: 14, padding: "16px 20px", border: "1px solid #F1F5F9", display: "flex", alignItems: "center", gap: 12 }}>
+                    <div style={{ width: 42, height: 42, borderRadius: 12, background: s.color+"18", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>{s.icon}</div>
+                    <div>
+                      <div style={{ fontSize: 20, fontWeight: 800, color: "#0F172A", lineHeight: 1 }}>{s.value}</div>
+                      <div style={{ fontSize: 12, color: "#64748B", marginTop: 2 }}>{s.label}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 16, marginBottom: 24 }}>
+                {/* Faturamento chart */}
+                <div style={{ background: "#fff", borderRadius: 16, padding: 20, border: "1px solid #F1F5F9" }}>
+                  <div style={{ fontWeight: 800, fontSize: 15, color: "#0F172A", marginBottom: 16 }}>💵 Faturamento Mensal</div>
+                  <div style={{ display: "flex", alignItems: "flex-end", gap: 8, height: 120 }}>
+                    {monthData.map(m => (
+                      <div key={m.label} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+                        <div style={{ fontSize: 9, color: "#64748B", fontWeight: 700 }}>
+                          {m.revenue > 0 ? `R$${Math.round(m.revenue)}` : ""}
+                        </div>
+                        <div style={{
+                          width: "100%", borderRadius: "4px 4px 0 0",
+                          height: `${Math.max((m.revenue / maxRev) * 90, m.revenue > 0 ? 6 : 0)}px`,
+                          background: "linear-gradient(180deg, #22D3EE, #0891B2)",
+                          transition: "height .3s",
+                        }} />
+                        <div style={{ fontSize: 9, color: "#94A3B8", fontWeight: 600, whiteSpace: "nowrap" }}>{m.label}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Pedidos chart */}
+                <div style={{ background: "#fff", borderRadius: 16, padding: 20, border: "1px solid #F1F5F9" }}>
+                  <div style={{ fontWeight: 800, fontSize: 15, color: "#0F172A", marginBottom: 16 }}>📦 Pedidos por Mês</div>
+                  <div style={{ display: "flex", alignItems: "flex-end", gap: 8, height: 120 }}>
+                    {monthData.map(m => (
+                      <div key={m.label} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+                        <div style={{ fontSize: 9, color: "#64748B", fontWeight: 700 }}>{m.count > 0 ? m.count : ""}</div>
+                        <div style={{
+                          width: "100%", borderRadius: "4px 4px 0 0",
+                          height: `${Math.max((m.count / maxCnt) * 90, m.count > 0 ? 6 : 0)}px`,
+                          background: "linear-gradient(180deg, #A78BFA, #7C3AED)",
+                          transition: "height .3s",
+                        }} />
+                        <div style={{ fontSize: 9, color: "#94A3B8", fontWeight: 600, whiteSpace: "nowrap" }}>{m.label}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Top services */}
+              <div style={{ background: "#fff", borderRadius: 16, padding: 20, border: "1px solid #F1F5F9" }}>
+                <div style={{ fontWeight: 800, fontSize: 15, color: "#0F172A", marginBottom: 16 }}>🏆 Serviços Mais Solicitados</div>
+                {topServices.every(s => s.count === 0) ? (
+                  <div style={{ textAlign: "center", padding: "20px 0", color: "#94A3B8", fontSize: 14 }}>Nenhum dado ainda</div>
+                ) : topServices.filter(s => s.count > 0).map((svc, i) => (
+                  <div key={svc.id} style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
+                    <div style={{ width: 24, height: 24, borderRadius: "50%", background: ["#FEF3C7","#F3F4F6","#FEF9C3","#F0F9FF","#F0FDF4"][i], display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 800, color: ["#D97706","#6B7280","#CA8A04","#0284C7","#16A34A"][i] }}>{i+1}</div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: "#0F172A" }}>{svc.icon} {svc.name}</span>
+                        <span style={{ fontSize: 12, color: "#64748B" }}>{svc.count}x</span>
+                      </div>
+                      <div style={{ height: 6, background: "#F1F5F9", borderRadius: 3, overflow: "hidden" }}>
+                        <div style={{ height: "100%", width: `${(svc.count / topServices[0].count) * 100}%`, background: "#22D3EE", borderRadius: 3, transition: "width .5s" }} />
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })()}
+
+      {showModal && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100 }}>
+          <div style={{ background: "#fff", borderRadius: 20, padding: 28, width: 480, maxHeight: "90vh", overflow: "auto" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+              <h3 style={{ margin: 0, fontSize: 18, fontWeight: 800 }}>Novo Pedido</h3>
+              <button onClick={() => setShowModal(false)} style={{ border: "none", background: "#F1F5F9", borderRadius: 8, padding: "4px 10px", cursor: "pointer" }}>✕</button>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 700, color: "#64748B", display: "block", marginBottom: 4 }}>CLIENTE *</label>
+                <select value={newOrder.cpf}
+                  onChange={e => {
+                    const sel = (clients || []).find(c => c.cpf === e.target.value);
+                    if (sel) setNewOrder(p => ({ ...p, cpf: sel.cpf, client: sel.name, phone: sel.phone, address: `${sel.street}, ${sel.number}${sel.complement ? " - " + sel.complement : ""} - ${sel.neighborhood}, ${sel.city}/${sel.state}` }));
+                    else setNewOrder(p => ({ ...p, cpf: "", client: "", phone: "", address: "" }));
+                  }}
+                  style={{ ...modalInp, background: "#fff" }}>
+                  <option value="">— Selecione um cliente —</option>
+                  {(clients || []).map(c => <option key={c.cpf} value={c.cpf}>{c.name} · {c.cpf}</option>)}
+                </select>
+                {newOrder.client && (
+                  <div style={{ marginTop: 6, padding: "8px 12px", background: "#F0FDFE", borderRadius: 8, border: "1px solid #22D3EE44", fontSize: 12 }}>
+                    📱 {newOrder.phone} &nbsp;·&nbsp; 📍 {newOrder.address}
+                  </div>
+                )}
+              </div>
+              {[["MODELO DO TÊNIS *","sneakers","text","Ex: Nike Air Max 90"],["DATA DE COLETA","pickupDate","date",""],["DATA DE ENTREGA","deliveryDate","date",""],["OBSERVAÇÕES","notes","text","Ex: manchas específicas..."]].map(([label, field, type, placeholder]) => (
+                <div key={field}>
+                  <label style={{ fontSize: 12, fontWeight: 700, color: "#64748B", display: "block", marginBottom: 4 }}>{label}</label>
+                  <input type={type} placeholder={placeholder} value={newOrder[field]}
+                    onChange={e => setNewOrder(p => ({ ...p, [field]: e.target.value }))}
+                    style={modalInp} />
+                </div>
+              ))}
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 700, color: "#64748B", display: "block", marginBottom: 4 }}>QUANTIDADE DE PARES</label>
+                <input type="number" min={1} max={20} value={newOrder.qty}
+                  onChange={e => setNewOrder(p => ({ ...p, qty: +e.target.value }))}
+                  style={modalInp} />
+              </div>
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 700, color: "#64748B", display: "block", marginBottom: 8 }}>SERVIÇOS (selecione um ou mais)</label>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 260, overflowY: "auto" }}>
+                  {SERVICES.map(svc => {
+                    const sel = (newOrder.services || []).includes(svc.id);
+                    return (
+                      <div key={svc.id} onClick={() => {
+                        const cur = newOrder.services || [];
+                        const updated = sel ? cur.filter(x => x !== svc.id) : [...cur, svc.id];
+                        const total = updated.reduce((s, id) => s + (SERVICES.find(x => x.id === id)?.price || 0), 0);
+                        setNewOrder(p => ({ ...p, services: updated, service: updated[0] || "", price: total * p.qty }));
+                      }} style={{
+                        padding: "9px 12px", borderRadius: 10, cursor: "pointer",
+                        border: `1.5px solid ${sel ? "#22D3EE" : "#E2E8F0"}`,
+                        background: sel ? "#F0FDFE" : "#fff",
+                        display: "flex", justifyContent: "space-between", alignItems: "center",
+                      }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <div style={{ width: 18, height: 18, borderRadius: 4, border: `2px solid ${sel ? "#22D3EE" : "#CBD5E1"}`, background: sel ? "#22D3EE" : "transparent", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, color: "#fff", flexShrink: 0 }}>{sel ? "✓" : ""}</div>
+                          <div>
+                            <div style={{ fontWeight: 700, fontSize: 13, color: "#0F172A" }}>{svc.icon} {svc.name}</div>
+                            <div style={{ fontSize: 11, color: "#94A3B8" }}>{svc.desc}</div>
+                          </div>
+                        </div>
+                        <div style={{ fontWeight: 700, color: "#0891B2", fontSize: 13, flexShrink: 0, marginLeft: 8 }}>R$ {svc.price.toFixed(2)}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+                {(newOrder.services || []).length > 0 && (
+                  <div style={{ marginTop: 8, padding: "8px 12px", background: "#F0FDFE", borderRadius: 8, border: "1px solid #22D3EE44", fontSize: 13, fontWeight: 700, color: "#0891B2" }}>
+                    Total: R$ {(newOrder.services || []).reduce((s, id) => s + (SERVICES.find(x => x.id === id)?.price || 0), 0).toFixed(2)}
+                  </div>
+                )}
+              </div>
+              <button onClick={addOrder} style={{
+                background: "#22D3EE", color: "#0C0F1A", border: "none", borderRadius: 12,
+                padding: 14, fontWeight: 800, fontSize: 15, cursor: "pointer", fontFamily: "inherit", marginTop: 4,
+              }}>Criar Pedido</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── ADMIN CREDENTIALS (altere aqui) ─────────────────────────────────────────
+const ADMIN_EMAIL    = "admin@magykclean.com.br";
+const ADMIN_PASSWORD = "magyk@2025";
+
+// ─── BACKEND URL (altere para sua URL após deploy no Railway) ─────────────────
+const BACKEND_URL = "https://web-production-5b0c7.up.railway.app";
+// Para testar localmente: const BACKEND_URL = "http://localhost:3001";
+// ✅ Backend no ar — PIX ativado!
+const BACKEND_READY = true;
+
+async function spCreatePix(order, client) {
+  const res = await fetch(`${BACKEND_URL}/pix/criar`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      amount:      Number(order.price),
+      name:        client.name,
+      document:    client.cpf.replace(/\D/g, ""),
+      email:       client.email,
+      external_id: order.id,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || "Erro ao criar cobrança PIX");
+  }
+  return await res.json();
+}
+
+async function spCheckPix(transactionId) {
+  const res = await fetch(`${BACKEND_URL}/pix/status/${transactionId}`);
+  if (!res.ok) throw new Error("Erro ao consultar status PIX");
+  return await res.json();
+}
+
+// ─── ADMIN LOGIN ──────────────────────────────────────────────────────────────
+
+function AdminLogin({ onSuccess, onBack }) {
+  const [email, setEmail]       = useState("");
+  const [password, setPassword] = useState("");
+  const [showPass, setShowPass] = useState(false);
+  const [error, setError]       = useState("");
+  const [loading, setLoading]   = useState(false);
+
+  function submit() {
+    if (!email || !password) { setError("Preencha e-mail e senha."); return; }
+    setLoading(true);
+    setTimeout(() => {
+      if (email.trim().toLowerCase() === ADMIN_EMAIL.toLowerCase() && password === ADMIN_PASSWORD) {
+        onSuccess();
+      } else {
+        setError("Credenciais inválidas.");
+        setLoading(false);
+      }
+    }, 600);
+  }
+
+  const inp = {
+    width: "100%", padding: "12px 14px", borderRadius: 10, boxSizing: "border-box",
+    border: "1.5px solid rgba(255,255,255,0.15)",
+    background: "rgba(255,255,255,0.07)", color: "#fff",
+    fontSize: 14, fontFamily: "inherit", outline: "none",
+  };
+
+  return (
+    <div style={{
+      minHeight: "100vh", background: "linear-gradient(135deg,#0C0F1A 0%,#0E1A2E 100%)",
+      display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+      padding: "40px 20px", fontFamily: "'Syne',sans-serif",
+    }}>
+      <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet" />
+
+      <div style={{ textAlign: "center", marginBottom: 32 }}>
+        <div style={{ fontSize: 36, marginBottom: 6 }}>🔐</div>
+        <h1 style={{ fontSize: 28, fontWeight: 800, color: "#fff", margin: 0, letterSpacing: -1 }}>
+          <span style={{ color: "#22D3EE" }}>Magyk</span>Clean
+        </h1>
+        <p style={{ color: "#475569", margin: "6px 0 0", fontSize: 13, letterSpacing: 1 }}>PAINEL ADMINISTRATIVO</p>
+      </div>
+
+      <div style={{
+        background: "rgba(255,255,255,0.04)", backdropFilter: "blur(12px)",
+        borderRadius: 20, padding: 32, width: "100%", maxWidth: 380,
+        border: "1px solid rgba(255,255,255,0.08)",
+      }}>
+        <h2 style={{ color: "#fff", fontSize: 18, fontWeight: 800, margin: "0 0 4px" }}>Acesso Restrito</h2>
+        <p style={{ color: "#475569", fontSize: 13, margin: "0 0 22px" }}>Somente para administradores</p>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <div>
+            <label style={{ fontSize: 11, fontWeight: 700, color: "#475569", letterSpacing: 0.5, display: "block", marginBottom: 4 }}>E-MAIL</label>
+            <input style={inp} type="email" placeholder="admin@magykclean.com.br"
+              value={email} onChange={e => { setEmail(e.target.value); setError(""); }} />
+          </div>
+          <div>
+            <label style={{ fontSize: 11, fontWeight: 700, color: "#475569", letterSpacing: 0.5, display: "block", marginBottom: 4 }}>SENHA</label>
+            <div style={{ position: "relative" }}>
+              <input style={{ ...inp, paddingRight: 44 }}
+                type={showPass ? "text" : "password"} placeholder="••••••••"
+                value={password}
+                onChange={e => { setPassword(e.target.value); setError(""); }}
+                onKeyDown={e => e.key === "Enter" && submit()} />
+              <button onClick={() => setShowPass(p => !p)} style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", fontSize: 16 }}>
+                {showPass ? "🙈" : "👁"}
+              </button>
+            </div>
+          </div>
+
+          {error && (
+            <div style={{ background: "rgba(248,113,113,0.1)", border: "1px solid rgba(248,113,113,0.3)", borderRadius: 10, padding: "10px 14px", fontSize: 13, color: "#F87171" }}>
+              ⚠ {error}
+            </div>
+          )}
+
+          <button onClick={submit} disabled={loading} style={{
+            background: loading ? "#0891B2" : "#22D3EE", color: "#0C0F1A",
+            border: "none", borderRadius: 12, padding: 14,
+            fontWeight: 800, fontSize: 15, cursor: loading ? "not-allowed" : "pointer",
+            fontFamily: "inherit", marginTop: 4,
+          }}>{loading ? "Verificando..." : "Entrar no Painel →"}</button>
+        </div>
+      </div>
+      <p style={{ textAlign: "center", marginTop: 20 }}>
+        <span onClick={onBack} style={{ color: "#334155", fontSize: 12, cursor: "pointer" }}>← Voltar para área do cliente</span>
+      </p>
+    </div>
+  );
+}
+
+// ─── APP ROOT ─────────────────────────────────────────────────────────────────
+
+function App() {
+  const [area, setArea]       = useState("client"); // "client" | "admin"
+  const [orders, setOrders]   = useState([]);
+  const [clients, setClients] = useState([]);
+  const [dbReady, setDbReady] = useState(false);
+
+  const [adminLogged, setAdminLogged]       = useState(false);
+  const [authScreen, setAuthScreen]         = useState("login");
+  const [loggedClient, setLoggedClient]     = useState(null);
+  const [justRegistered, setJustRegistered] = useState(false);
+  const [regEmail, setRegEmail]             = useState("");
+
+  useEffect(() => {
+    async function load() {
+      const savedOrders  = await dbGet("magyk:orders");
+      const savedClients = await dbGet("magyk:clients");
+      if (Array.isArray(savedOrders))  setOrders(savedOrders);
+      if (Array.isArray(savedClients)) setClients(savedClients);
+      setDbReady(true);
+    }
+    load();
+  }, []);
+
+  useEffect(() => {
+    if (dbReady) dbSet("magyk:orders", orders);
+  }, [orders, dbReady]);
+
+  async function handleRegister(data) {
+    const updated = [...(clients || []).filter(c => c.cpf !== data.cpf), data];
+    setClients(updated);
+    await dbSet("magyk:clients", updated);
+    setRegEmail(data.email);
+    setJustRegistered(true);
+    setAuthScreen("login");
+  }
+
+  if (!dbReady) {
+    return (
+      <div style={{ height: "100vh", background: "#0C0F1A", display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 16, fontFamily: "sans-serif" }}>
+        <div style={{ fontSize: 40 }}>👟✨</div>
+        <div style={{ color: "#22D3EE", fontSize: 18, fontWeight: 700 }}>Carregando MagykClean...</div>
+        <div style={{ color: "#475569", fontSize: 13 }}>Conectando ao banco de dados</div>
+      </div>
+    );
+  }
+
+  // ── ADMIN AREA ───────────────────────────────────────────────────────────────
+  if (area === "admin") {
+    if (!adminLogged) {
+      return <AdminLogin onSuccess={() => setAdminLogged(true)} onBack={() => setArea("client")} />;
+    }
+    return (
+      <div style={{ height: "100vh", display: "flex", flexDirection: "column" }}>
+        <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet" />
+        <div style={{ background: "#060810", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 20px", borderBottom: "1px solid #1E293B" }}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: "#22D3EE", letterSpacing: 0.5 }}>🔐 MagykClean Admin</span>
+          <button onClick={() => { setAdminLogged(false); setArea("client"); }} style={{
+            background: "rgba(255,255,255,0.06)", color: "#64748B",
+            border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8,
+            padding: "4px 12px", fontSize: 12, cursor: "pointer", fontFamily: "inherit",
+          }}>Sair do Admin</button>
+        </div>
+        <div style={{ flex: 1, overflow: "auto" }}>
+          <AdminPanel orders={orders} setOrders={setOrders} clients={clients} />
+        </div>
+      </div>
+    );
+  }
+
+  // ── CLIENT AREA ──────────────────────────────────────────────────────────────
+  if (loggedClient) {
+    return <ClientArea client={loggedClient} orders={orders} setOrders={setOrders} onLogout={() => { setLoggedClient(null); setAuthScreen("login"); }} />;
+  }
+  if (authScreen === "register") {
+    return <RegisterForm clients={clients} onDone={handleRegister} onGoLogin={() => { setAuthScreen("login"); setJustRegistered(false); }} />;
+  }
+  return (
+    <LoginForm
+      clients={clients}
+      onSuccess={client => { setLoggedClient(client); setJustRegistered(false); }}
+      onGoRegister={() => { setAuthScreen("register"); setJustRegistered(false); }}
+      onGoAdmin={() => setArea("admin")}
+      justRegistered={justRegistered}
+      regEmail={regEmail}
+    />
+  );
+}
+
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
